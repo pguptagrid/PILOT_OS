@@ -1,0 +1,417 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* ======== stream css overrides ======== */
+.str-video__call-stats {
+  max-width: 500px;
+  position: relative;
+}
+
+.str-video__speaker-layout__wrapper {
+  max-height: 700px;
+}
+
+.str-video__participant-details {
+  color: white;
+}
+
+.str-video__menu-container {
+  color: white;
+}
+
+.str-video__notification {
+  color: white;
+}
+
+.str-video__participant-list {
+  background-color: #1c1f2e;
+  padding: 10px;
+  border-radius: 10px;
+  color: white;
+  height: 100%;
+}
+
+.str-video__call-controls__button {
+  height: 40px;
+}
+
+/* Forcefully hide any avatar overlays, fallback placeholders, and profile drawings 
+   rendered on top of active, live camera video tiles to prevent blinking/flashing issues */
+.str-video__avatar,
+.str-video__avatar-container,
+.str-video__user-avatar,
+.str-video__video-placeholder-avatar,
+.str-video__participant-avatar,
+.str-video__speaker-layout__avatar-container {
+  display: none !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.glassmorphism {
+  background: rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.glassmorphism2 {
+  background: rgba(18, 17, 17, 0.25);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* ==== clerk class override ===== */
+.cl-providerIcon__github{
+  filter:invert(1);
+}
+.filterinvert{
+  filter: invert(1);
+}
+.cl-userButtonPopoverActionButtonIcon {
+  color: white;
+}
+
+.cl-logoBox {
+  height: 40px;
+  width:40px;
+}
+.cl-dividerLine {
+  background: #252a41;
+  height: 2px;
+}
+
+.cl-socialButtonsIconButton {
+  border: 3px solid #565761;
+}
+
+.cl-internal-wkkub3 {
+  color: white;
+}
+.cl-userButtonPopoverActionButton {
+  color: white;
+}
+
+/* =============================== */
+
+@layer utilities {
+  .flex-center {
+    @apply flex justify-center items-center;
+  }
+
+  .flex-between {
+    @apply flex justify-between items-center;
+  }
+}
+
+/* animation */
+
+.show-block {
+  width: 100%;
+  max-width: 350px;
+  display: block;
+  animation: show 0.7s forwards linear;
+}
+
+@keyframes show {
+  0% {
+    animation-timing-function: ease-in;
+    width: 0%;
+  }
+
+  100% {
+    animation-timing-function: ease-in;
+    width: 100%;
+  }
+}
+
+/* ==================== LIGHT THEME OVERRIDES FOR PILOT INTEGRATION ==================== */
+
+:root {
+  --text-primary: #1A1A1A;
+  --text-secondary: #555555;
+  --border-color: #E5E2DA;
+  --amber: #F5A700;
+  --amber-dark: #7C5E00;
+  --amber-bg: #FFF8E7;
+}
+
+/* Ensure default text is charcoal */
+body, html {
+  color: var(--text-primary) !important;
+}
+
+/* Override Tailwind text-white class on non-colored containers */
+.text-white:not(button):not(button *):not(.bg-orange-1 *):not(.bg-blue-1 *):not(.bg-purple-1 *):not(.bg-yellow-1 *):not(.bg-blue-600 *):not(.bg-\[\#0E78F9\] *):not(.glassmorphism *):not(.h-\[300px\] *) {
+  color: var(--text-primary) !important;
+}
+
+/* Make secondary text color elements legible */
+.text-sky-1, 
+.text-sky-2, 
+.text-sky-3, 
+.text-zinc-50, 
+.text-gray-200, 
+.text-gray-300, 
+.text-gray-400 {
+  color: var(--text-secondary) !important;
+}
+
+/* Make headers in sidebar and other sections dark */
+.sticky p,
+.sticky span,
+nav p,
+nav span,
+aside p,
+aside span,
+main h1,
+main h2,
+main h3,
+main h4 {
+  color: var(--text-primary);
+}
+
+/* Navigation items active styling - Amber/Gold brand highlight instead of purple/fuchsia */
+.bg-fuchsia-600,
+.bg-fuchsia-500 {
+  background-color: var(--amber-bg) !important;
+  border-left: 4px solid var(--amber) !important;
+  border-radius: 0 8px 8px 0 !important;
+}
+
+.bg-fuchsia-600 p,
+.bg-fuchsia-500 p {
+  color: var(--amber-dark) !important;
+  font-weight: 600 !important;
+}
+
+/* Navigation icons active styling mapping to gold/amber tint */
+.bg-fuchsia-600 img,
+.bg-fuchsia-500 img {
+  filter: sepia(100%) saturate(1000%) brightness(80%) hue-rotate(350deg) !important;
+}
+
+/* Non-active navigation icons styling to stand out on light background */
+.sticky img:not(.bg-fuchsia-600 img):not(.bg-fuchsia-500 img),
+nav img:not(.bg-fuchsia-600 img):not(.bg-fuchsia-500 img) {
+  filter: brightness(0.2) contrast(1.2);
+}
+
+/* Disable the old filterinvert behavior on light background */
+.filterinvert {
+  filter: none !important;
+}
+
+/* Dropdown menus, cards, and dialogue components */
+.bg-dark-1 {
+  background-color: #FFFFFF !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+.bg-dark-3 {
+  background-color: #F7F6F3 !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+.bg-dark-4 {
+  background-color: var(--amber-bg) !important;
+  color: var(--amber-dark) !important;
+  border: 1px solid var(--border-color) !important;
+}
+
+/* Inputs, Textareas, DatePickers forced to light bg and dark text */
+input, 
+textarea, 
+select, 
+.react-datepicker-wrapper input {
+  background-color: #FFFFFF !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+input::placeholder, 
+textarea::placeholder {
+  color: #888888 !important;
+}
+
+/* Dialog components background override */
+.bg-dark-1.bg-opacity-30 {
+  background-color: rgba(255, 255, 255, 0.96) !important;
+  border: 1px solid var(--border-color) !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important;
+}
+
+.bg-dark-1.bg-opacity-30 h1,
+.bg-dark-1.bg-opacity-30 h2,
+.bg-dark-1.bg-opacity-30 h3,
+.bg-dark-1.bg-opacity-30 p,
+.bg-dark-1.bg-opacity-30 label {
+  color: var(--text-primary) !important;
+}
+
+/* Clerk Mock Provider styling */
+.cl-userButtonPopoverActionButtonIcon,
+.cl-userButtonPopoverActionButton,
+.cl-internal-wkkub3 {
+  color: var(--text-primary) !important;
+}
+
+.cl-dividerLine {
+  background: var(--border-color) !important;
+}
+
+.cl-socialButtonsIconButton {
+  border: 1px solid var(--border-color) !important;
+}
+
+/* Stream Video layouts overrides for light background integration */
+.str-video__participant-list {
+  background-color: #FFFFFF !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+.str-video__participant-details,
+.str-video__menu-container,
+.str-video__notification {
+  color: var(--text-primary) !important;
+}
+
+.str-video__speaker-layout {
+  background-color: #F7F6F3 !important;
+}
+
+/* Action button inside MeetingCard */
+.text-fuchsia-600.filterinvert {
+  color: var(--amber-dark) !important;
+  filter: none !important;
+}
+
+/* Homepage Hero Banner text elements (must stay white over video) */
+.h-\[300px\] *, 
+.h-\[300px\] p, 
+.h-\[300px\] h1, 
+.h-\[300px\] h2 {
+  color: #FFFFFF !important;
+}
+
+/* Hamburger button color on light theme */
+img[alt="hamburger icon"] {
+  filter: brightness(0.2) contrast(1.2) !important;
+}
+
+/* Target tailwind arbitrary background and border values from MeetingRoom AI Sidebar and Control Bar */
+.bg-\[\#1C1F2E\], 
+[class*="bg-[#1C1F2E]"] {
+  background-color: #FFFFFF !important;
+}
+
+.border-l.border-\[\#252A41\], 
+.border-b.border-\[\#252A41\],
+.border-\[\#252A41\],
+[class*="border-[#252A41]"] {
+  border-color: var(--border-color) !important;
+}
+
+.bg-\[\#252A41\]\/60,
+[class*="bg-[#252A41]/60"] {
+  background-color: var(--amber-bg) !important;
+  border-color: var(--border-color) !important;
+  color: var(--amber-dark) !important;
+}
+
+.bg-\[\#161925\],
+[class*="bg-[#161925]"] {
+  background-color: #F7F6F3 !important;
+  border-color: var(--border-color) !important;
+}
+
+.fixed.bottom-0.bg-\[\#161925\]\/90,
+[class*="bg-[#161925]/90"] {
+  background-color: rgba(255, 255, 255, 0.9) !important;
+  border-top: 1px solid var(--border-color) !important;
+}
+
+/* Call Control buttons like participants toggler, layout selector */
+.bg-\[\#19232d\],
+[class*="bg-[#19232d]"] {
+  background-color: #E5E2DA !important;
+}
+.bg-\[\#19232d\] svg,
+[class*="bg-[#19232d]"] svg {
+  color: var(--text-primary) !important;
+}
+.hover\:bg-\[\#4c535b\]:hover,
+[class*="hover:bg-[#4c535b]"]:hover {
+  background-color: #D6D2C4 !important;
+}
+
+/* AI Companion active vs inactive state override */
+.border-fuchsia-500 {
+  border-color: var(--amber) !important;
+}
+.bg-fuchsia-600\/20,
+[class*="bg-fuchsia-600/20"] {
+  background-color: var(--amber-bg) !important;
+}
+
+/* Scrollbar styling matching PILOT */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #FFBF00;
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #FFBF00;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.text-fuchsia-300 {
+  color: var(--amber) !important;
+}
+
+/* Custom styling for Stream SDK CallStatsButton to align with PILOT's yellow button theme */
+.str-video__call-stats-button,
+button.str-video__call-stats-button {
+  background-color: #F5A700 !important;
+  border-radius: 12px !important;
+  border: 1px solid transparent !important;
+  color: #FFFFFF !important;
+  padding: 8px 16px !important;
+  height: 38px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: all 0.2s ease-in-out !important;
+}
+
+.str-video__call-stats-button:hover,
+button.str-video__call-stats-button:hover {
+  background-color: #d97706 !important;
+}
+
+.str-video__call-stats-button svg,
+button.str-video__call-stats-button svg {
+  color: #FFFFFF !important;
+  width: 20px !important;
+  height: 20px !important;
+}
+

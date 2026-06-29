@@ -1,0 +1,22 @@
+graph TD
+    A[Voice Tool Triggered] --> B{Active Logged-in User in DB?}
+    B -- Yes --> C{Speaker is generic/unknown?}
+    B -- No --> D{Speaker is generic/unknown?}
+    
+    C -- Yes --> E[Auto-Map to Active User Profile]
+    C -- No --> F{Speaker matches active user name?}
+    F -- Yes --> H[Check RBAC Permissions]
+    F -- No --> G[Block: Unauthorized Voice Signature]
+    
+    D -- Yes --> G
+    D -- No --> H
+    
+    E --> H
+    H --> I{Authorized by Role?}
+    I -- No --> J[Block: RBAC Denied]
+    I -- Yes --> K{Is Destructive Tool?}
+    
+    K -- No --> L[Allow: Execute Tool & Audit]
+    K -- Yes --> M[Open 10s Latch Window for Vocal Confirmation]
+    M -- Confirmed --> L
+    M -- Timeout/Denied --> N[Block: Confirm Timeout]

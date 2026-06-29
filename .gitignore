@@ -1,0 +1,93 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# ── Sensitive / Secrets ──
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.secret
+secrets.json
+
+# ── Large model files (ONNX, binary weights) ──
+*.onnx
+*.bin
+*.pt
+*.safetensors
+*.gguf
+*.mlx
+whisper-*/
+kokoro-*/
+
+# ── Database files ──
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Logs ──
+*.log
+logs/
+server_stdout.log
+
+# ── Node / Frontend ──
+node_modules/
+frontend/node_modules/
+TALKINIA_STREAM/node_modules/
+frontend/.next/
+TALKINIA_STREAM/.next/
+frontend/dist/
+frontend/build/
+.npm/
+
+# ── macOS ──
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── pytest / coverage ──
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ── Uploads / generated data ──
+data/uploads/
+data/recordings/
+data/snapshots/
+backend/data/
+
+# ── Presentation build artifacts ──
+presentation/*.pdf
+
+# ── Unusable / non-pushable directories ──
+.venv/
+venv/
+env/
+node_modules/
+frontend/node_modules/
+TALKINIA_STREAM/node_modules/
+frontend/.next/
+TALKINIA_STREAM/.next/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+unusable/

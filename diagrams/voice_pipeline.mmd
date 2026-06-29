@@ -1,0 +1,41 @@
+sequenceDiagram
+    autonumber
+    actor Speaker as Pawan (Speaker)
+    participant Client as Browser (Web Audio API)
+    participant WS as WebSocket Connection
+    participant Bus as QueueBus (bus.py)
+    participant VAD as SmartTurn (VAD Worker)
+    participant Diarizer as Diarizer Worker (Pyannote)
+    participant Identity as Identity Worker (Biometrics)
+    participant ASR as ASR Transcriber (Whisper)
+    participant LLM as Front LLM Worker
+
+    %% Step 1: Capture & Streaming
+    Speaker->>Client: Sound Waves ("please go to the next slide")
+    Note over Client: Captures 16kHz mono 16-bit PCM<br/>Groups into 256ms slices (4096 samples / 8KB)
+    Client->>WS: Streams 8KB raw PCM chunks
+    WS->>Bus: Enqueues RawAudioChunk to [raw_audio_q]
+
+    %% Step 2: VAD & Turn Sensation
+    VAD->>Bus: Dequeues from [raw_audio_q]
+    Note over VAD: Computes RMS energy (>300)<br/>Aggregates frames into buffer<br/>Senses turn completion (silence detection)
+    VAD->>Bus: Enqueues TurnSegment to [diar_q]
+
+    %% Step 3: Diarization & Feature Extraction
+    Diarizer->>Bus: Dequeues from [diar_q]
+    Note over Diarizer: Computes STFT, 40 Mel filterbanks, & Pitch (F0)<br/>Builds 512-D voice embedding vector<br/>Clusters speaker using Cosine Similarity (threshold 0.72)
+    Diarizer->>Bus: Enqueues LabeledTurn to [identity_q]
+
+    %% Step 4: Speaker Identification & Biometrics
+    Identity->>Bus: Dequeues from [identity_q]
+    Note over Identity: Loads SQLite float16 voice signatures<br/>Matches segment embedding via Cosine Similarity<br/>Resolves speaker name ("Pawan") & role ("developer")
+    Identity->>ASR: Forwards verified LabeledTurn
+
+    %% Step 5: Speech-to-Text Transcription
+    Note over ASR: Runs faster-whisper (distil-large-v3 model)<br/>Transcribes PCM audio to raw text
+    ASR->>Bus: Enqueues TranscriptSpan to [transcript_q]
+
+    %% Step 6: Front LLM Routing
+    LLM->>Bus: Dequeues from [transcript_q]
+    Note over LLM: Evaluates Fast Keyword Regex Intercept<br/>Routes voice command via Ollama / Groq / Gemini<br/>Classifies intent (ignore, respond_now, delegate)
+    LLM->>Bus: Enqueues PipelineEvent to [event_q] (or triggers tool)

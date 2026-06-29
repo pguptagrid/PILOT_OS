@@ -1,0 +1,31 @@
+sequenceDiagram
+    autonumber
+    actor Pawan as Pawan (User)
+    participant Client as Browser (Web Audio API)
+    participant WS as WebSocket Connection
+    participant VAD as VAD & Turn-Taking (SmartTurn)
+    participant Biometrics as Speaker Biometrics (NumPy / float16)
+    participant ASR as Whisper STT (ASR Engine)
+    participant FrontLLM as Front LLM Router (Groq/Gemini)
+    participant Policy as Policy Gate (RBAC)
+    participant TTS as Kokoro TTS (ONNX Engine)
+    
+    Pawan->>Client: sound waves ("please go to the next slide")
+    Note over Client: Captures 16kHz Mono Int16<br/>Slices into 4096 samples (256ms / 8KB)
+    Client->>WS: streams 8KB binary chunks over WebSocket
+    WS->>VAD: forwards raw PCM slices
+    Note over VAD: Computes RMS energy (>300)<br/>Aggregates frames into 96KB buffer (3s)<br/>Senses turn completion (silence)
+    VAD->>Biometrics: triggers Speaker Identification (96KB PCM)
+    Note over Biometrics: Computes STFT & 40 Mel Filterbanks<br/>Autocorrelates pitch (F0)<br/>Projects to 512-D vector + L2 Normalizes<br/>Loads float16 DB BLOBs (1024B) & Cosine Matches
+    Biometrics-->>VAD: Identified: "Pawan" (developer, score: 0.94)
+    VAD->>ASR: triggers transcription (96KB PCM)
+    Note over ASR: Runs faster-whisper (distil-large-v3)<br/>Filters hallucinations & noise
+    ASR-->>VAD: Transcription: "please go to the next slide"
+    VAD->>FrontLLM: forwards text, speaker, role
+    Note over FrontLLM: Runs Fast Keyword Intercept<br/>Maps to "ppt_navigate" (direction: next)
+    FrontLLM->>Policy: requests execution clearance
+    Note over Policy: Checks role "developer" vs "ppt_navigate"<br/>RBAC check passes (allowed)
+    Policy->>TTS: triggers vocal response ("Moving forward!")
+    Note over TTS: Runs local Kokoro ONNX (CoreML MPS)<br/>Generates 24kHz Mono WAV
+    TTS-->>Client: streams audio/wav bytes + executes slide transition
+    Client-->>Pawan: plays vocal response + slides advance
