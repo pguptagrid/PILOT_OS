@@ -55,7 +55,7 @@ const MobileNav = () => {
                       href={link.route}
                       key={link.label}
                       className={cn(
-                        "flex gap-4 items-center p-3 rounded-lg w-full max-w-60",
+                        "flex gap-4 items-center p-3 rounded-lg w-full max-w-60 h-auto",
                         {
                           "bg-fuchsia-500": isActive,
                           'text-black': isActive,

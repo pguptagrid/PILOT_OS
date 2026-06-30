@@ -92,3 +92,13 @@ __pycache__/
 *.py[cod]
 unusable/
 unusable/
+
+# Python virtual environments
+.venv/
+venv/
+.venv_py314_backup/
+venv_py314_backup/
+backend/.venv/
+backend/venv/
+backend/.venv_py314_backup/
+backend/venv_py314_backup/
