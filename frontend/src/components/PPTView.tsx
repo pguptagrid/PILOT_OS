@@ -942,9 +942,9 @@ export function PPTCopilotView({ sessionId, isListening, agentStatus, onToggleMi
                 {!streamDone && (
                   <div style={{ position:"absolute", bottom:10, right:14, zIndex:10,
                                 padding:"0.15rem 0.55rem", borderRadius:4,
-                                background:"rgba(245,167,0,0.18)", border:"1px solid rgba(245,167,0,0.4)",
-                                fontSize:"0.55rem", color:"#F5A700", fontWeight:600 }}>
-                    ⚡ {slides.filter(s=>s.img_b64).length}/{streamTotal} rendered
+                                background:"rgba(255, 255, 255, 0.18)", border:"1px solid rgba(255, 255, 255, 0.4)",
+                                fontSize:"0.55rem", color:"#f9f8f6ff", fontWeight:600 }}>
+                    {/* ⚡ {slides.filter(s=>s.img_b64).length}/{streamTotal} rendered */}
                   </div>
                 )}
               </div>

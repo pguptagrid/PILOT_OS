@@ -57,7 +57,7 @@ export function CustomerCareView() {
       destination: to,
       date: date
     });
-  }, [from, to, date]);
+  }, [from, to, date, sess.isListening]);
 
   // Real-time flights from last flight_search tool result
   const flightCard = store.toolCards.slice().reverse().find(c => c.tool === "flight_search");

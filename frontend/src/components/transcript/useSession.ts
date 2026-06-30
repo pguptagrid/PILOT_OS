@@ -36,7 +36,7 @@ export function useSession() {
       statusUnsub();
       transUnsub();
     };
-  }, [store]);
+  }, []);
 
   function toggle(usecase?: string) {
     sharedVoiceService.toggle(usecase);

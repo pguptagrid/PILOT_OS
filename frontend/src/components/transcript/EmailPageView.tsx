@@ -41,7 +41,7 @@ export function EmailPageView() {
       cc_bcc: formCcBcc,
       subject: formSubject
     });
-  }, [formFrom, formTo, formCcBcc, formSubject]);
+  }, [formFrom, formTo, formCcBcc, formSubject, sess.isListening]);
 
   const emailTranscripts = ts.filter(t => isEmailRelated(t.text));
 
@@ -195,11 +195,11 @@ export function EmailPageView() {
                 style={{ width: "100%", padding: "0.4rem 0.6rem", borderRadius: 6, border: `1px solid ${C.border}`, background: "#fff", color: C.text1, fontSize: "0.74rem", outline: "none" }}/>
             </div>
 
-            {/* <div>https://blue-kaitlyn-44.tiiny.site/#demos
+            <div>
               <label style={{ fontSize: "0.68rem", fontWeight: 700, color: C.text2, display: "block", marginBottom: 3 }}>SUBJECT:</label>
               <input value={formSubject} onChange={e => setFormSubject(e.target.value)} placeholder="Enter email subject"
                 style={{ width: "100%", padding: "0.4rem 0.6rem", borderRadius: 6, border: `1px solid ${C.border}`, background: "#fff", color: C.text1, fontSize: "0.74rem", outline: "none" }}/>
-            </div> */}
+            </div> 
           </div>
 
           {/* Quick Guide */}

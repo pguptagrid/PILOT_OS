@@ -258,12 +258,32 @@ class SharedVoiceService {
       if (!res.session_id) throw new Error("No session_id in response");
       
       this.sessionId = res.session_id;
-      store.setSession(this.sessionId??"");
-      store.setIsListeningGlobal(true);
-      this.isListening = true;
 
       this.wsClient = new PilotWSClient(this.sessionId??"", token, {
-        onOpen: () => this.setStatus("Listening..."),
+        onOpen: () => {
+          this.setStatus("Listening...");
+          // Instantly synchronize any manually filled inputs to the backend session right after connection opens
+          const currentPage = useAppStore.getState().page;
+          console.log("[PILOT_DEBUG] onOpen fired, currentPage =", currentPage);
+          if (currentPage === "email") {
+            this.sendPayload({
+              type: "typed_email_context",
+              to: useAppStore.getState().typedEmailTo || "",
+              subject: useAppStore.getState().typedEmailSubject || ""
+            });
+          } else if (currentPage === "care") {
+            const origin = useAppStore.getState().typedFlightOrigin || "";
+            const destination = useAppStore.getState().typedFlightDestination || "";
+            const date = useAppStore.getState().typedFlightDate || "";
+            console.log("[PILOT_DEBUG] Sending typed_flight_context:", { origin, destination, date });
+            this.sendPayload({
+              type: "typed_flight_context",
+              origin,
+              destination,
+              date
+            });
+          }
+        },
         barge_in: () => {
           console.log("[PILOT] Barge-in event received. Stopping audio playback.");
           this.stopAudio();
@@ -291,7 +311,7 @@ class SharedVoiceService {
           } else if (conf < 0.4 && p.speaker !== "PILOT") {
             this.setStatus(`⚠ Low confidence (${Math.round(conf * 100)}%) — speak clearly`);
             const lowConfEntry = {
-              text: `⚠ voice not clearly identified`,
+              text: `Please Speak clearly.`,
               speaker: "PILOT", role: "system", confidence: 1.0, timestamp: p.timestamp
             };
             this.onTranscriptCallbacks.forEach(cb => cb(lowConfEntry));
@@ -356,29 +376,14 @@ class SharedVoiceService {
         },
       });
 
+      store.setSession(this.sessionId??"");
+      store.setIsListeningGlobal(true);
+      this.isListening = true;
+
       this.wsClient.connectEvents();
       this.wsClient.connectAudio();
 
-      // Instantly synchronize any manually filled inputs on the screens to the backend session container right after handshake
-      setTimeout(() => {
-        const page = store.page;
-        if (page === "email") {
-          this.sendPayload({
-            type: "typed_email_context",
-            to: store.typedEmailTo || "",
-            subject: store.typedEmailSubject || ""
-          });
-          console.log("[PILOT] Pre-call email parameters synchronized securely from store:", { to: store.typedEmailTo, subject: store.typedEmailSubject });
-        } else if (page === "care") {
-          this.sendPayload({
-            type: "typed_flight_context",
-            origin: store.typedFlightOrigin || "",
-            destination: store.typedFlightDestination || "",
-            date: store.typedFlightDate || ""
-          });
-          console.log("[PILOT] Pre-call flight parameters synchronized securely from store.");
-        }
-      }, 500);
+      // Handshake handles context sync in onOpen now.
 
       this.capture = new AudioCapture(
         (buf) => this.wsClient?.sendAudio(buf),

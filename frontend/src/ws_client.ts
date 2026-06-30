@@ -30,6 +30,7 @@ export class PilotWSClient {
   private eventsWs: WebSocket | null = null;  // handles JSON data. 
   private audioWs: WebSocket | null = null;// handles only microphone audio.
   private _closed = false;  // prevent autoreconnect after user intentionally disconnects. 
+  private payloadQueue: object[] = []; // Queue payloads if the WebSocket isn't open yet
 
   constructor(
     private sessionId: string,
@@ -46,6 +47,16 @@ export class PilotWSClient {
     //Runs when connection succeeds.
     this.eventsWs.onopen = () => {
       console.log(`[PILOT] events WS open — session ${this.sessionId.slice(0, 8)}`);
+      
+      // Flush any queued payloads first
+      while (this.payloadQueue.length > 0) {
+        const payload = this.payloadQueue.shift();
+        if (payload && this.eventsWs?.readyState === WebSocket.OPEN) {
+          console.log("[PILOT] Flushed queued payload:", payload);
+          this.eventsWs.send(JSON.stringify(payload));
+        }
+      }
+
       if (this.handlers.onOpen)
         this.handlers.onOpen();
     };
@@ -134,6 +145,9 @@ export class PilotWSClient {
   sendPayload(payload: object) {
     if (this.eventsWs?.readyState === WebSocket.OPEN) {
       this.eventsWs.send(JSON.stringify(payload));
+    } else {
+      console.log("[PILOT] WS not open, queueing payload:", payload);
+      this.payloadQueue.push(payload);
     }
   }
 

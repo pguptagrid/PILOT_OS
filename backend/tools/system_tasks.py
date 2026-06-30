@@ -234,20 +234,26 @@ async def write_email_tool(args: dict, session_id: str) -> dict:
             
             # Parse CC part
             if cc_part:
+                cc_words = set(re.findall(r'\b\w+\b', cc_part))
                 for u in all_users:
-                    if u.name.lower() in cc_part or u.email.lower() in cc_part:
+                    name_parts = set(u.name.lower().split())
+                    if (name_parts & cc_words) or u.email.lower() in cc_part:
                         inferred_cc.append(u.email)
             
             # Parse BCC part
             if bcc_part:
+                bcc_words = set(re.findall(r'\b\w+\b', bcc_part))
                 for u in all_users:
-                    if u.name.lower() in bcc_part or u.email.lower() in bcc_part:
+                    name_parts = set(u.name.lower().split())
+                    if (name_parts & bcc_words) or u.email.lower() in bcc_part:
                         inferred_bcc.append(u.email)
             
             # Parse main To recipient (only if target_email is default/empty)
             if target_email == "team@pilot.ai" or not state.pending_email_recipient_email:
+                to_words = set(re.findall(r'\b\w+\b', to_part))
                 for u in all_users:
-                    if u.name.lower() in to_part or u.email.lower() in to_part:
+                    name_parts = set(u.name.lower().split())
+                    if (name_parts & to_words) or u.email.lower() in to_part:
                         target_user_name = u.name
                         target_email = u.email
                         break
@@ -271,22 +277,30 @@ async def write_email_tool(args: dict, session_id: str) -> dict:
     else:
         cc_bcc = "info@pilot.ai"
 
+    # ── Clean the query of wake-word artifacts that confuse small LLMs ──
+    clean_query = re.sub(r'\b(hey|hello|hi|ok|okay|a|ey|ah)\s+,?\s*(?:pilot|violet)\b', '', query, flags=re.IGNORECASE).strip()
+    clean_query = re.sub(r'^[,\s]+', '', clean_query).strip()  # Remove leading commas/spaces
+    if not clean_query:
+        clean_query = query  # Fallback to original if stripping removed everything
+
     # Explicitly enforce user prefilled variables (from state payload sync) inside background LLM prompts
-    prompt = (f"You are a professional email writing assistant. Draft a polished, formal email based on these parameters:\n\n"
-              f"Recipient: {target_user_name} (Email: {target_email})\n"
-              f"CC/BCC Recipients: {cc_bcc}\n"
+    prompt = (f"TASK: Write a professional email. Follow the instructions EXACTLY.\n\n"
+              f"── EMAIL PARAMETERS ──\n"
+              f"Recipient Name: {target_user_name}\n"
+              f"Recipient Email: {target_email}\n"
+              f"CC/BCC: {cc_bcc}\n"
               f"Subject: {subject}\n"
-              f"Core message / instructions: '{query}'\n\n"
-              f"Guidelines:\n"
-              f"1. Tone: Exceptionally professional, clear, and business-appropriate.\n"
-              f"2. Output Format: Output ONLY the actual email message body itself. Do NOT include email headers (such as To, From, Subject, Cc) or dividing lines in your response. Start directly with the salutation 'Dear {target_user_name},' and end with the sign-off.\n\n"
-              f"Template:\n"
-              f"Dear {target_user_name},\n\n"
-              f"<Write the formal email body precisely following instructions. Do not use placeholders.>\n\n"
-              f"Best regards,\n"
-              f"PILOT Voice OS Assistant")
+              f"Topic / Purpose of Email: {clean_query}\n\n"
+              f"── STRICT RULES ──\n"
+              f"1. The email MUST be about the topic stated above ('{subject}'). Do NOT write about anything else.\n"
+              f"2. Tone: Professional, clear, and business-appropriate.\n"
+              f"3. Output ONLY the email body text. Do NOT include headers like To:, From:, Subject:, CC:.\n"
+              f"4. Start with 'Dear {target_user_name},' and end with 'Best regards,' followed by the sender's name.\n"
+              f"5. Keep the email 3-5 paragraphs long.\n\n"
+              f"── BEGIN EMAIL ──\n"
+              f"Dear {target_user_name},\n\n")
               
-    draft = await _call_text_llm(prompt, system_prompt="You are a professional email writing assistant. Draft clean, structured, and formal emails containing only the message body.")
+    draft = await _call_text_llm(prompt, system_prompt="You are a professional email writing assistant. You write polished, on-topic business emails. Output ONLY the email body — no headers, no markdown formatting.", max_tokens=800)
     
     # Parse subject out of draft safely
     subject_match = re.search(r"Subject:\s*(.*)", draft)
@@ -477,7 +491,7 @@ async def cancel_task_tool(args: dict, session_id: str) -> dict:
     }
 
 
-async def _call_text_llm(prompt: str, system_prompt: str = "You are a helpful voice assistant. Answer concisely in 1-3 spoken sentences.") -> str:
+async def _call_text_llm(prompt: str, system_prompt: str = "You are a helpful voice assistant. Answer concisely in 1-3 spoken sentences.", max_tokens: int = 250) -> str:
     # Try Groq first
     if settings.GROQ_API_KEY:
         try:
@@ -489,7 +503,7 @@ async def _call_text_llm(prompt: str, system_prompt: str = "You are a helpful vo
                     {"role": "system", "content": system_prompt},
                     {"role": "user",   "content": prompt}
                 ],
-                max_tokens=250
+                max_tokens=max_tokens
             )
             if resp.choices[0].message.content:
                 return resp.choices[0].message.content.strip()
@@ -511,15 +525,22 @@ async def _call_text_llm(prompt: str, system_prompt: str = "You are a helpful vo
     # Fallback to local Ollama
     try:
         import httpx
-        url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/generate"
-        async with httpx.AsyncClient(timeout=25.0) as client:
+        url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/chat"
+        async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(url, json={
                 "model": settings.OLLAMA_MODEL,
-                "prompt": f"System: {system_prompt}\n\nUser: {prompt}",
-                "stream": False
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ],
+                "stream": False,
+                "options": {
+                    "num_predict": max_tokens,
+                    "temperature": 0.4
+                }
             })
             if resp.status_code == 200:
-                return resp.json().get("response", "").strip()
+                return resp.json().get("message", {}).get("content", "").strip()
     except Exception as e:
         logger.error(f"Ollama local tool text call failed: {e}")
         

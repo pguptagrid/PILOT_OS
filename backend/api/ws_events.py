@@ -23,7 +23,6 @@ async def ws_events(websocket: WebSocket, session_id: str):
     email = websocket.query_params.get("email")
     name = websocket.query_params.get("name")
     if email and name:
-        from backend.core.session_state import get_state
         state = get_state(session_id)
         if not hasattr(state, "session_participants"):
             state.session_participants = {}
@@ -72,6 +71,7 @@ async def ws_events(websocket: WebSocket, session_id: str):
                 payload_str = await asyncio.wait_for(websocket.receive_text(), timeout=25)
                 try:
                     payload = json.loads(payload_str)
+                    logger.info(f"[{session_id[:6]}] Received WS payload: {payload}")
                     if payload.get("type") == "typed_flight_context":
                         state = get_state(session_id)
                         state.typed_origin = payload.get("origin", "")
@@ -98,8 +98,8 @@ async def ws_events(websocket: WebSocket, session_id: str):
                                 "message_id": payload.get("message_id")
                             }
                         })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(f"Error processing WS message: {e}", exc_info=True)
             except asyncio.TimeoutError:
                 await websocket.send_text(json.dumps({"type": "ping"}))
     except (WebSocketDisconnect, Exception):

@@ -2,7 +2,11 @@ from pydantic_settings import BaseSettings
 from typing import Optional
 from dotenv import load_dotenv
 import os
-load_dotenv()
+
+# Resolve .env relative to this file's directory (backend/), not the CWD.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ENV_FILE = os.path.join(_HERE, "..", ".env")  # backend/.env
+load_dotenv(_ENV_FILE)
 class Settings(BaseSettings):
     # App
     APP_NAME: str = "PILOT"
@@ -18,8 +22,8 @@ class Settings(BaseSettings):
     TTS_PROVIDER: str = os.getenv('TTS_PROVIDER') or "edge_tts"
     DIAR_PROVIDER: str = os.getenv('DIAR_PROVIDER') or "pyannote"
     EMBED_PROVIDER: str = os.getenv('EMBED_PROVIDER') or "wespeaker"
-    FRONT_LLM_PROVIDER: str = os.getenv('FRONT_LLM_PROVIDER')
-    BG_LLM_PROVIDER: str = os.getenv('BG_LLM_PROVIDER')
+    FRONT_LLM_PROVIDER: str = os.getenv('FRONT_LLM_PROVIDER') or "ollama"
+    BG_LLM_PROVIDER: str = os.getenv('BG_LLM_PROVIDER') or "ollama"
     
     # Hardware acceleration preferences — toggle between 'cpu' and 'mps' (for Apple Silicon CoreML)
     PREFERRED_DEVICE: str = "cpu"
@@ -66,7 +70,7 @@ class Settings(BaseSettings):
     EMAIL_FROM: str = os.getenv('SMTP_USER') or  "pilot@localhost"
 
     class Config:
-        env_file = ".env"
+        env_file = _ENV_FILE  # always load backend/.env regardless of CWD
         extra = "ignore"
 
 settings = Settings()

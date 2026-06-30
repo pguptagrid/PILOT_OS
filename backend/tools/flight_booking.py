@@ -112,20 +112,44 @@ async def flight_search(args: dict, session_id: str) -> dict:
     from backend.core.session_state import get_state
     state = get_state(session_id)
 
+    # ── DEBUG: Log everything entering the tool ──
+    logger.info(f"[FLIGHT_DEBUG] session_id={session_id[:8]}")
+    logger.info(f"[FLIGHT_DEBUG] args={args}")
+    logger.info(f"[FLIGHT_DEBUG] state.typed_origin='{state.typed_origin}' state.typed_destination='{state.typed_destination}' state.typed_date='{state.typed_date}'")
+
     # ── Extract search details ──
     query = args.get("query") or args.get("synopsis") or ""
+    logger.info(f"[FLIGHT_DEBUG] query='{query}'")
     
-    # Heuristic extraction of cities
-    known_cities = {
-        "mumbai", "delhi", "chennai", "bangalore", "hyderabad",
-        "kolkata", "pune", "ahmedabad", "jaipur", "lucknow"
-    }
-    words = re.findall(r"[a-zA-Z]+", query.lower())
-    cities = [w.title() for w in words if w in known_cities]
+    # Clean punctuation to prevent regex failures at the end of sentences
+    clean_query = re.sub(r'[.,!?]', '', query)
     
-    # Extract locations, prioritizing manual UI overrides first. No longer hardcodes Mumbai/Delhi if missing!
-    origin = state.typed_origin or args.get("origin") or (cities[0] if len(cities) > 0 else "")
-    destination = state.typed_destination or args.get("destination") or (cities[1] if len(cities) > 1 else "")
+    # Extract cities dynamically using regex to capture 'from X' and 'to Y'
+    origin_match = re.search(r'from\s+([a-zA-Z\s]+?)(?=\s+to\s+|\s+on\s+|\s*$)', clean_query, re.IGNORECASE)
+    dest_match = re.search(r'to\s+([a-zA-Z\s]+?)(?=\s+from\s+|\s+on\s+|\s*$)', clean_query, re.IGNORECASE)
+    
+    extracted_origin = origin_match.group(1).strip().title() if origin_match else ""
+    extracted_dest = dest_match.group(1).strip().title() if dest_match else ""
+    logger.info(f"[FLIGHT_DEBUG] regex extracted: origin='{extracted_origin}' dest='{extracted_dest}'")
+    
+    # Fallback heuristic if regex fails
+    if not extracted_origin or not extracted_dest:
+        known_cities = {
+            "mumbai", "delhi", "chennai", "bangalore", "hyderabad",
+            "kolkata", "pune", "ahmedabad", "jaipur", "lucknow",
+            "new york", "london", "paris", "dubai", "singapore", "tokyo"
+        }
+        words = re.findall(r"[a-zA-Z]+(?:\s+[a-zA-Z]+)?", clean_query.lower())
+        cities = [w.title() for w in words if w in known_cities]
+        logger.info(f"[FLIGHT_DEBUG] fallback heuristic words={words} cities={cities}")
+        if not extracted_origin and len(cities) > 0:
+            extracted_origin = cities[0]
+        if not extracted_dest and len(cities) > 1:
+            extracted_dest = cities[1]
+    
+    origin = state.typed_origin or args.get("origin") or extracted_origin
+    destination = state.typed_destination or args.get("destination") or extracted_dest
+    logger.info(f"[FLIGHT_DEBUG] FINAL origin='{origin}' destination='{destination}'")
     
     # Validation check: If origin or destination is missing, return a prompt asking for details
     if not origin or not destination:
