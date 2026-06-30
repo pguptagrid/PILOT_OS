@@ -1,3 +1,15 @@
+import asyncio
+import logging
+import os
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.db.engine import get_db
+from backend.db.models import VoiceEnrollment
+
 """
 Enrollment API — mic recording + file upload → embedding → identity
 Features: start, submit audio (mic or file), finalize, list, delete
@@ -21,17 +33,6 @@ Features: start, submit audio (mic or file), finalize, list, delete
 #       ▼
 # Enrollment Ready
 
-import asyncio
-import logging
-import os
-
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from backend.db.engine import get_db
-from backend.db.models import VoiceEnrollment
 
 router = APIRouter()
 logger = logging.getLogger("pilot.enrollment")
