@@ -2,16 +2,13 @@
 PILOT — Portable Intelligent Listener for Open Tasking
 FastAPI app factory + lifespan (startup / shutdown)
 """
-from fastapi import Request
-from fastapi.responses import JSONResponse
-
-from backend.core.security import decode_token
 import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.api.auth import router as auth_router
@@ -24,6 +21,7 @@ from backend.api.transcripts import router as transcript_router
 from backend.api.ws_audio import router as ws_audio_router
 from backend.api.ws_events import router as ws_events_router
 from backend.core.events import shutdown_pipeline, startup_pipeline
+from backend.core.security import decode_token
 from backend.db.engine import init_db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")

@@ -1,7 +1,7 @@
 import logging
-from backend.queues.bus import QueueBus, TurnSegment
-import logging
 import re
+
+from backend.queues.bus import QueueBus, TurnSegment
 from backend.services.stt import whisper_provider
 
 logger = logging.getLogger("pilot.smart_turn")
