@@ -1,21 +1,20 @@
-"""
-PILOT Machine Learning Model Diagnostic & Verification Suite.
-Loads and isolates every single ML pipeline model, testing them under synthetic fixtures.
-"""
 
 import asyncio
 import logging
 import time
-
+import os
+import sys
 import numpy as np
-
+"""
+PILOT Machine Learning Model Diagnostic & Verification Suite.
+Loads and isolates every single ML pipeline model, testing them under synthetic fixtures.
+"""
 # Configure basic console logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("model_check")
 
 # Initialize and import services
-import os
-import sys
+
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 

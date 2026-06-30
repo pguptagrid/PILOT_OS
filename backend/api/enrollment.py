@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from typing import List
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -62,7 +63,6 @@ async def start(req: StartReq, db: AsyncSession = Depends(get_db)):
     return {"speaker_id": e.id, "name": req.name, "role": req.role}
 
 
-from typing import List
 
 
 @router.post("/audio")

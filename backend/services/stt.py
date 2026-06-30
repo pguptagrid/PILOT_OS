@@ -187,11 +187,11 @@
 import asyncio
 import logging
 import threading
+import numpy as np
 
 from backend.core.config import settings
 
 logger = logging.getLogger("pilot.stt")
-import numpy as np
 
 # Whisper hallucinates these on silence — filter them out
 _HALLUCINATIONS = {

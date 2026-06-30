@@ -2,7 +2,10 @@
 PILOT — Portable Intelligent Listener for Open Tasking
 FastAPI app factory + lifespan (startup / shutdown)
 """
+from fastapi import Request
+from fastapi.responses import JSONResponse
 
+from backend.core.security import decode_token
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -54,10 +57,7 @@ app.add_middleware(
 )
 
 # ── Authentication Middleware Proxy for REST API routes ──
-from fastapi import Request
-from fastapi.responses import JSONResponse
 
-from backend.core.security import decode_token
 
 
 @app.middleware("http")

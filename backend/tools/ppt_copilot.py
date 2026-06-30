@@ -1,17 +1,20 @@
-"""PPT tools — navigate + jump to slide by number or title + summarize."""
-
 import asyncio
 import logging
+from backend.core.slide_store import _current_slide,_slide_store
+from backend.core.slide_store import resolve_sid 
+from backend.queues.bus import bus
+
+
+
+
+"""PPT tools — navigate + jump to slide by number or title + summarize."""
 
 logger = logging.getLogger("pilot.tools.ppt")
 
-from backend.core.slide_store import _current_slide, _slide_store, resolve_sid
 
 
 async def ppt_navigate(args: dict, session_id: str) -> dict:
-    direction = args.get("direction", "next")
-    from backend.queues.bus import bus
-
+    direction = args.get("direction","next")    
     effective_sid = resolve_sid(session_id)
     slides = _slide_store.get(effective_sid, [])
     total = len(slides)

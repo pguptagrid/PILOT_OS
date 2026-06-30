@@ -1,14 +1,10 @@
 import logging
-
 from backend.queues.bus import QueueBus, TurnSegment
-
-logger = logging.getLogger("pilot.smart_turn")
-
 import logging
 import re
-
 from backend.services.stt import whisper_provider
 
+logger = logging.getLogger("pilot.smart_turn")
 logger = logging.getLogger("pilot.smart_turn")
 
 # Trailing fragments indicating incomplete thoughts or natural breath pauses
