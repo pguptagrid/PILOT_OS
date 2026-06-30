@@ -101,6 +101,30 @@ async def ws_events(websocket: WebSocket, session_id: str):
                         logger.info(
                             f"[{session_id[:6]}] Synced manual email input context: To={state.pending_email_recipient_email}, CcBcc={state.pending_email_cc_bcc}, Subject={state.pending_email_subject}"
                         )
+                    elif payload.get("type") == "user_confirm":
+                        # UI "Confirm" button clicked — resolve pending policy latch window
+                        from backend.tools.policy import PENDING_CONFIRMATIONS
+
+                        pending = PENDING_CONFIRMATIONS.get(session_id)
+                        if pending:
+                            logger.info(
+                                f"[{session_id[:6]}] UI confirm received — resolving latch for tool '{pending['tool']}'"
+                            )
+                            pending["confirmed"] = True
+                            pending["event"].set()
+                        else:
+                            logger.warning(f"[{session_id[:6]}] user_confirm received but no pending confirmation found")
+                    elif payload.get("type") == "user_cancel":
+                        # UI "Cancel" button clicked — force-close the latch window as declined
+                        from backend.tools.policy import PENDING_CONFIRMATIONS
+
+                        pending = PENDING_CONFIRMATIONS.get(session_id)
+                        if pending:
+                            logger.info(
+                                f"[{session_id[:6]}] UI cancel received — rejecting latch for tool '{pending['tool']}'"
+                            )
+                            pending["confirmed"] = False
+                            pending["event"].set()
                     elif payload.get("type") == "chat_message":
                         from backend.core.ws_manager import broadcast_all
 

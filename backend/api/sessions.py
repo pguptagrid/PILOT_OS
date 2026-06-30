@@ -294,6 +294,7 @@ async def draft_email_route(req: DraftEmailReq):
         f"Dear Recipient,\n\n"
         f"[Write the body of the formal email here, following the instructions and tone requirements precisely. Do not include placeholders.]\n\n"
         f"Best regards,\n"
+        f"{req.from_email}\n"
         f"PILOT Voice OS Assistant"
     )
 
