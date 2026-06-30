@@ -583,7 +583,7 @@ async def upload_stream(session_id: str, file: UploadFile = File(...)):
             pdf_doc.close()
             try:
                 shutil.rmtree(temp_dir, ignore_errors=True)
-            except:
+            except Exception:
                 pass
 
         _slide_store[session_id] = store_list
@@ -694,7 +694,7 @@ async def render_stream(session_id: str, token: str):
             pdf_doc.close()
             try:
                 shutil.rmtree(temp_dir, ignore_errors=True)
-            except:
+            except Exception:
                 pass
 
         _slide_store[session_id] = store_list
@@ -1373,7 +1373,7 @@ def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = 
         pdf_doc.close()
         try:
             shutil.rmtree(temp_dir, ignore_errors=True)
-        except:
+        except Exception:
             pass
 
     _slide_store[session_id] = store_list

@@ -274,7 +274,6 @@ class DraftEmailReq(BaseModel):
 
 @router.post("/draft-email")
 async def draft_email_route(req: DraftEmailReq):
-
     from backend.core.session_state import get_state
     from backend.queues.bus import bus
     from backend.tools.system_tasks import _call_text_llm

@@ -131,7 +131,7 @@ async def write_file_tool(args: dict, session_id: str) -> dict:
         try:
             if content.startswith('"') and content.endswith('"'):
                 content = json.loads(content)
-        except:
+        except Exception:
             pass
 
     # Return the generated code directly to be displayed on transcripts, without writing any physical file to disk

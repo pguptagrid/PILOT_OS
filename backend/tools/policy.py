@@ -88,7 +88,7 @@ class PolicyGate:
         # Verify if there is currently an active logged-in user in the workspace
         # If the speaking voice similarity does not match the active logged-in user profile, block delegation!
         async with AsyncSessionLocal() as db:
-            result = await db.execute(select(User).where(User.is_active == True))
+            result = await db.execute(select(User).where(User.is_active))
             active_users = result.scalars().all()
 
         # Resolve the specific authenticated user for this session

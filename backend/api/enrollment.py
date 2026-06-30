@@ -54,7 +54,6 @@ async def list_speakers(db: AsyncSession = Depends(get_db)):
 # Begins a new voice enrollment process by registering a name and role.
 @router.post("/start")
 async def start(req: StartReq, db: AsyncSession = Depends(get_db)):
-
     e = VoiceEnrollment(user_id=None, speaker_name=req.name, role=req.role)
     db.add(e)  # add a new instance
     await db.commit()  # write the record and generates a uniqie , auto incremented primary key.
