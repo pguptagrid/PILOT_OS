@@ -3,9 +3,14 @@ Front LLM Worker — routes transcript → TTS + optional tool delegation.
 Transitions: LISTENING → SPEAKING → LISTENING
               LISTENING → DELEGATING → LISTENING
 """
-import asyncio, logging, base64, time
+
+import asyncio
+import base64
+import logging
+import time
 from dataclasses import dataclass
 from typing import Optional
+
 from backend.queues.bus import QueueBus, TranscriptSpan
 
 logger = logging.getLogger("pilot.front_llm")
@@ -13,13 +18,13 @@ logger = logging.getLogger("pilot.front_llm")
 
 @dataclass
 class RouteDecision:
-    action:     str
-    preamble:   Optional[str]
-    tool:       Optional[str]
-    args:       dict
-    mode:       str
+    action: str
+    preamble: Optional[str]
+    tool: Optional[str]
+    args: dict
+    mode: str
     speaker_id: Optional[str]
-    role:       Optional[str]
+    role: Optional[str]
     session_id: str
 
 
@@ -29,6 +34,7 @@ class FrontLLMWorker:
 
     def _load(self):
         from backend.services.front_llm import front_llm_provider
+
         front_llm_provider.load()
 
     async def run(self):
@@ -42,9 +48,9 @@ class FrontLLMWorker:
                 logger.error(f"FrontLLM error: {e}", exc_info=True)
 
     async def _process(self, span: TranscriptSpan):
-        from backend.services.front_llm import front_llm_provider
+        from backend.core.session_manager import SessionState, session_manager
         from backend.core.session_state import get_state
-        from backend.core.session_manager import session_manager, SessionState
+        from backend.services.front_llm import front_llm_provider
 
         ctx = get_state(span.session_id).get_context(6)
         raw = await front_llm_provider.classify(
@@ -66,8 +72,9 @@ class FrontLLMWorker:
             session_id=span.session_id,
         )
 
-        logger.info(f"[{span.session_id[:6]}] {decision.action} "
-                    f"preamble={decision.preamble!r} tool={decision.tool}")
+        logger.info(
+            f"[{span.session_id[:6]}] {decision.action} preamble={decision.preamble!r} tool={decision.tool}"
+        )
 
         if decision.action == "ignore":
             return
@@ -76,31 +83,34 @@ class FrontLLMWorker:
             # → SPEAKING
             await session_manager.transition(span.session_id, SessionState.SPEAKING)
             # Show PILOT reply in transcript immediately
-            await self.bus.emit_event("transcript", {
-                "text":       decision.preamble,
-                "speaker":    "PILOT",
-                "role":       "assistant",
-                "confidence": 1.0,
-                "timestamp":  time.time(),
-            }, span.session_id)
-            
-            # Cancel any existing active TTS task cleanly
-            # if the virtual assistant is currently in the middle of speaking ans the user speaks again,we need to stop the old audio immediately. it checks if there is an active running task and if it not yet completed it calls cancel on the asyncio task. this interrupts the background generator , instantly stopping the old audio stream. 
+            await self.bus.emit_event(
+                "transcript",
+                {
+                    "text": decision.preamble,
+                    "speaker": "PILOT",
+                    "role": "assistant",
+                    "confidence": 1.0,
+                    "timestamp": time.time(),
+                },
+                span.session_id,
+            )
 
-            #Presenter asks: "Tell me about the Q3 targets."
+            # Cancel any existing active TTS task cleanly
+            # if the virtual assistant is currently in the middle of speaking ans the user speaks again,we need to stop the old audio immediately. it checks if there is an active running task and if it not yet completed it calls cancel on the asyncio task. this interrupts the background generator , instantly stopping the old audio stream.
+
+            # Presenter asks: "Tell me about the Q3 targets."
             # The assistant begins reading a long response: "Our Q3 targets are focused on three core areas. First, expanding micro-frontend architecture... Second, improving voice biometrics latency..."
             # After hearing the first sentence, the presenter realizes they only need details on biometrics, so they interrupt: "Wait, tell me only about the voice biometrics part!"
 
             # The assistant stops reading the old content and immediately begins reading the new, more specific response.
 
-
             state = get_state(span.session_id)
             if state.active_tts_task and not state.active_tts_task.done():
                 state.active_tts_task.cancel()
                 logger.info(f"[{span.session_id[:6]}] Cancelled active TTS task to speak new content.")
-                
+
             # Synthesise and send audio (async — doesn't block)
-            # for preamble until background task is running. non blocking execution. 
+            # for preamble until background task is running. non blocking execution.
             task = asyncio.create_task(_speak(decision.preamble, span.session_id))
             state.active_tts_task = task
 
@@ -111,10 +121,10 @@ class FrontLLMWorker:
 
 
 async def _speak(text: str, session_id: str):
-    from backend.services.tts import tts_to_bytes
-    from backend.queues.bus import bus
-    from backend.core.session_manager import session_manager, SessionState
+    from backend.core.session_manager import SessionState, session_manager
     from backend.core.session_state import get_state
+    from backend.queues.bus import bus
+    from backend.services.tts import tts_to_bytes
 
     current_task = asyncio.current_task()
     logger.info(f"TTS synthesising: '{text}'")
@@ -123,38 +133,42 @@ async def _speak(text: str, session_id: str):
         # Keep tts_playing False during compilation so late mic frames do not trigger accidental self-interruption
         state.tts_playing = False
         state.barge_in = False
-        
+
         data, mime = await tts_to_bytes(text, speed=1.1)
         # media type , Multipurpose Internet Mail Extensions.
-        
+
         # Check if the user interrupted while TTS was compiling
         if state.barge_in:
-            logger.info(f"[{session_id[:6]}] Interruption detected during TTS compilation. Aborting preamble playback.")
+            logger.info(
+                f"[{session_id[:6]}] Interruption detected during TTS compilation. Aborting preamble playback."
+            )
             return
 
         # If a newer TTS task was started, abort gracefully
         if state.active_tts_task is not current_task:
-            logger.info(f"[{session_id[:6]}] New TTS task started during compilation. Aborting old preamble playback.")
+            logger.info(
+                f"[{session_id[:6]}] New TTS task started during compilation. Aborting old preamble playback."
+            )
             return
 
         if not data:
             logger.warning("TTS returned empty — no audio sent")
             return
-            
+
         b64 = base64.b64encode(data).decode("ascii")
         # Set tts_playing to True right before emitting the audio to user's browser
         state.tts_playing = True
         state.tts_start_time = time.time()
         state.barge_in = False
-        
+
         await bus.emit_event("tts_audio", {"b64": b64, "mime": mime}, session_id)
         logger.info(f"TTS sent {len(data)} bytes ({mime})")
-        
+
         # Give the audio a moment to play out before clearing tts_playing
         # Calculated based on standard byte length / sample rate playback time (with a buffer)
         playback_duration = max(0.5, len(data) / 48000.0)
         await asyncio.sleep(playback_duration)
-        
+
     except Exception as e:
         logger.error(f"TTS error: {e}", exc_info=True)
     finally:
@@ -166,52 +180,71 @@ async def _speak(text: str, session_id: str):
 
 
 async def _delegate(decision: RouteDecision):
+    from backend.core.session_manager import SessionState, session_manager
     from backend.tools.policy import policy_gate
-    from backend.core.session_manager import session_manager, SessionState
 
     allowed = await policy_gate.check(
-        tool=decision.tool, speaker_id=decision.speaker_id,
-        role=decision.role, session_id=decision.session_id,
+        tool=decision.tool,
+        speaker_id=decision.speaker_id,
+        role=decision.role,
+        session_id=decision.session_id,
     )
     if not allowed:
-        from backend.queues.bus import bus
-        from backend.core.session_state import get_state
         import time
-        
+
+        from backend.core.session_state import get_state
+        from backend.queues.bus import bus
+
         denied_msg = "You don't have permission to do this."
         # Transition session to SPEAKING to deliver the voice alert
         await session_manager.transition(decision.session_id, SessionState.SPEAKING)
-        
+
         # Emit transcript event so it renders in the chat UI
-        await bus.emit_event("transcript", {
-            "text":       denied_msg,
-            "speaker":    "PILOT",
-            "role":       "assistant",
-            "confidence": 1.0,
-            "timestamp":  time.time(),
-        }, decision.session_id)
-        
+        await bus.emit_event(
+            "transcript",
+            {
+                "text": denied_msg,
+                "speaker": "PILOT",
+                "role": "assistant",
+                "confidence": 1.0,
+                "timestamp": time.time(),
+            },
+            decision.session_id,
+        )
+
         # Cancel any active TTS speech and trigger new vocalization
         state = get_state(decision.session_id)
         if state.active_tts_task and not state.active_tts_task.done():
             state.active_tts_task.cancel()
-            
+
         task = asyncio.create_task(_speak(denied_msg, decision.session_id))
         state.active_tts_task = task
         return
 
-    from backend.core.bg_supervisor import bg_supervisor, Job
     import uuid
+
+    from backend.core.bg_supervisor import Job, bg_supervisor
+
     job = Job(
         job_id=str(uuid.uuid4())[:8],
-        tool=decision.tool, args=decision.args, mode=decision.mode,
-        speaker_id=decision.speaker_id, role=decision.role,
+        tool=decision.tool,
+        args=decision.args,
+        mode=decision.mode,
+        speaker_id=decision.speaker_id,
+        role=decision.role,
         session_id=decision.session_id,
     )
     await bg_supervisor.submit(job)
     from backend.queues.bus import bus
-    await bus.emit_event("job_queued", {
-        "job_id": job.job_id, "tool": job.tool,
-        "requester": job.speaker_id, "mode": job.mode,
-    }, job.session_id)
+
+    await bus.emit_event(
+        "job_queued",
+        {
+            "job_id": job.job_id,
+            "tool": job.tool,
+            "requester": job.speaker_id,
+            "mode": job.mode,
+        },
+        job.session_id,
+    )
     # DELEGATING → LISTENING when job completes (bg_supervisor handles this)

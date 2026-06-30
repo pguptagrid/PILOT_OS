@@ -1,29 +1,41 @@
 import pytest
 from httpx import AsyncClient
-from main import app
-from db.engine import engine, init_db
-from db.models import User, Group, GroupMember
-from core.security import hash_password, create_token
 from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from core.security import create_token, hash_password
+from db.engine import engine, init_db
+from db.models import Group, GroupMember, User
+from main import app
+
 
 @pytest.mark.asyncio
 async def test_groups_workflow():
     # Initialize test database tables
     await init_db()
-    
+
     # Create test client
     async with AsyncClient(app=app, base_url="http://test") as ac:
         AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
-        
+
         async with AsyncSessionLocal() as db:
             # Create user 1 and user 2
-            u1 = User(name="Test User 1", email="test1@example.com", hashed_pw=hash_password("pw123"), is_active=True)
-            u2 = User(name="Test User 2", email="test2@example.com", hashed_pw=hash_password("pw123"), is_active=True)
+            u1 = User(
+                name="Test User 1",
+                email="test1@example.com",
+                hashed_pw=hash_password("pw123"),
+                is_active=True,
+            )
+            u2 = User(
+                name="Test User 2",
+                email="test2@example.com",
+                hashed_pw=hash_password("pw123"),
+                is_active=True,
+            )
             db.add_all([u1, u2])
             await db.commit()
             await db.refresh(u1)
             await db.refresh(u2)
-            
+
             u1_id = u1.id
             u2_id = u2.id
             u1_email = u1.email
@@ -37,7 +49,7 @@ async def test_groups_workflow():
             create_res = await ac.post(
                 "/api/v1/groups",
                 headers=headers,
-                json={"name": "Test Group X", "description": "Desc X", "member_ids": [u2_id]}
+                json={"name": "Test Group X", "description": "Desc X", "member_ids": [u2_id]},
             )
             assert create_res.status_code == 200
             group_data = create_res.json()
@@ -73,6 +85,7 @@ async def test_groups_workflow():
             # Clean up database
             async with AsyncSessionLocal() as db:
                 from sqlalchemy import delete
+
                 await db.execute(delete(GroupMember).where(GroupMember.group_id == group_id))
                 await db.execute(delete(Group).where(Group.id == group_id))
                 await db.execute(delete(User).where(User.id.in_([u1_id, u2_id])))

@@ -2,8 +2,10 @@
 Shared WS message schemas — FSE-AB shared.
 Keep in sync with contracts/ws_events.ts.
 """
-from pydantic import BaseModel
+
 from typing import Any, Optional
+
+from pydantic import BaseModel
 
 
 class WSEvent(BaseModel):

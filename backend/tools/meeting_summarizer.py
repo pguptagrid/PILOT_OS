@@ -1,26 +1,24 @@
 # backend/tools/meeting_summarizer.py
 import asyncio
 import logging
-import json
 
 from sqlalchemy import select
 
 # SMTP username,password,host,port
-#imports the asyncronous database sesion.
-# 
+# imports the asyncronous database sesion.
+#
 from backend.core.config import settings
 from backend.db.engine import AsyncSessionLocal
-from backend.db.models import TranscriptLog
-from backend.tools.system_tasks import _call_text_llm  # leverage established background agent LLM helpers
-from backend.db.models import User
+from backend.db.models import TranscriptLog, User
+
 # from backend.core.session_state import get_state
 
 logger = logging.getLogger("pilot.tools.summarizer")
 
+
 async def compile_meeting_minutes(args: dict, session_id: str) -> dict:
     """Queries SQLite dialogue history, generates action items via Gemini, and drafts/sends an email summary."""
-    
-    
+
     # 1. Query all transcripts for the active session from SQLite
     logger.info(f"Gathering dialogue transcripts for session: {session_id[:8]}")
     async with AsyncSessionLocal() as db:
@@ -33,15 +31,19 @@ async def compile_meeting_minutes(args: dict, session_id: str) -> dict:
 
     if not logs:
         return {
-            "status": "error", 
-            "message": "no_transcripts", 
-            "spoken_reply": "This session has no recorded dialogue to summarize yet."
+            "status": "error",
+            "message": "no_transcripts",
+            "spoken_reply": "This session has no recorded dialogue to summarize yet.",
         }
 
     # 2. Automatically resolve all participants who spoke in this meeting
     # We query their enrolled names from the transcripts and fetch their respective emails from the User database table
-    participant_names = set(log.speaker_id for log in logs if log.speaker_id and log.speaker_id.lower() not in ("pilot", "you", "unknown"))
-    
+    participant_names = set(
+        log.speaker_id
+        for log in logs
+        if log.speaker_id and log.speaker_id.lower() not in ("pilot", "you", "unknown")
+    )
+
     recipient_emails = []
     # Always include the primary target requested in the payload args (the creator/host)
     creator_email = args.get("recipient_email") or args.get("to")
@@ -50,6 +52,7 @@ async def compile_meeting_minutes(args: dict, session_id: str) -> dict:
 
     # 1. Retrieve all participants who registered via WebSocket connection params
     from backend.core.session_state import get_state
+
     state = get_state(session_id)
     if hasattr(state, "session_participants") and state.session_participants:
         for email in state.session_participants.keys():
@@ -71,8 +74,7 @@ async def compile_meeting_minutes(args: dict, session_id: str) -> dict:
 
     # 3. Format transcripts into a clean dialogue string
     dialogue_history = "\n".join(
-        f"[{log.speaker_id or 'unknown'} ({log.role or 'user'})]: {log.text}" 
-        for log in logs
+        f"[{log.speaker_id or 'unknown'} ({log.role or 'user'})]: {log.text}" for log in logs
     )
 
     # 4. Call Gemini/Ollama to compile summaries & action items via established background text LLM
@@ -83,13 +85,16 @@ async def compile_meeting_minutes(args: dict, session_id: str) -> dict:
         f"Explicitly isolate, format, and extract 'Action Items' or 'Assigned Tasks' with owner names based on what individuals spoke in the dialogue. "
         f"Keep the summary brief and highlight key decisions."
     )
-    
+
     try:
         from backend.tools.system_tasks import _call_text_llm
+
         summary_text = await _call_text_llm(prompt)
     except Exception as e:
         logger.error(f"Background text LLM compilation failed: {e}")
-        summary_text = "Action Items:\n- Review recent team session tasks and complete outstanding pipeline designs."
+        summary_text = (
+            "Action Items:\n- Review recent team session tasks and complete outstanding pipeline designs."
+        )
 
     # 5. Assemble the Email Draft
     subject = f"Meeting Minutes & Actions — Session #{session_id[:8]}"
@@ -111,9 +116,9 @@ Ada (Lead Engineer / PILOT Voice OS)"""
             import smtplib
             from email.mime.multipart import MIMEMultipart
             from email.mime.text import MIMEText
-            
+
             logger.info(f"Broadcasting meeting summary to: {', '.join(recipient_emails)}")
-            
+
             # Send via asyncio to thread for each participant's address
             def _send_all():
                 with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
@@ -121,13 +126,13 @@ Ada (Lead Engineer / PILOT Voice OS)"""
                     server.starttls()
                     server.ehlo()
                     server.login(settings.SMTP_USER, settings.SMTP_PASS)
-                    
+
                     for target_email in recipient_emails:
                         msg = MIMEMultipart("alternative")
                         msg["Subject"] = subject
-                        msg["From"]    = settings.SMTP_USER
-                        msg["To"]      = target_email
-                        
+                        msg["From"] = settings.SMTP_USER
+                        msg["To"] = target_email
+
                         formatted_html = email_body.replace("\n", "<br/>")
                         html = f"""
                         <div style="font-family:sans-serif;max-width:540px;margin:40px auto;background:#F9F8F6;
@@ -142,7 +147,7 @@ Ada (Lead Engineer / PILOT Voice OS)"""
                         """
                         msg.attach(MIMEText(html, "html"))
                         server.sendmail(settings.SMTP_USER, target_email, msg.as_string())
-            
+
             await asyncio.to_thread(_send_all)
             email_sent = True
             spoken = f"I've successfully compiled our conversation and emailed the meeting minutes and action items to all {len(recipient_emails)} participants!"
@@ -155,17 +160,21 @@ Ada (Lead Engineer / PILOT Voice OS)"""
 
     # 6. PERSIST CRITICAL MEETING NOTES DIRECTLY IN THE PARENT PILOT SESSION ENTRY (So it appears on dashboard)
     try:
-        from backend.db.models import Session
         import json
+
+        from backend.db.models import Session
+
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(Session).where(Session.session_id == session_id))
             s = result.scalar_one_or_none()
             if s:
                 s.summary = f"Meeting Summary:\n{summary_text}"
-                s.bullets = json.dumps([
-                    "Summarized 45-minute sync with 8 participants",
-                    "Dispatched action minutes to target team mails",
-                ])
+                s.bullets = json.dumps(
+                    [
+                        "Summarized 45-minute sync with 8 participants",
+                        "Dispatched action minutes to target team mails",
+                    ]
+                )
                 await db.commit()
                 logger.info(f"Successfully committed compiled minutes to PILOT DB Session {session_id[:8]}")
     except Exception as db_err:
@@ -184,11 +193,8 @@ Ada (Lead Engineer / PILOT Voice OS)"""
         "summary": summary_text,
         "email_draft": email_body,
         "spoken_reply": spoken,
-        "email_sent": email_sent
+        "email_sent": email_sent,
     }
-
-
-
 
 
 # compile_meeting_minutes()

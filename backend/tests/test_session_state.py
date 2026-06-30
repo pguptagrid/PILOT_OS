@@ -1,5 +1,5 @@
-import pytest
-from core.session_state import get_state, clear_state
+from core.session_state import clear_state, get_state
+
 
 def test_ring_buffer():
     state = get_state("test-session")
@@ -9,6 +9,7 @@ def test_ring_buffer():
     assert len(ctx) == 10
     assert ctx[-1]["text"] == "span 59"
     clear_state("test-session")
+
 
 def test_get_context_empty():
     state = get_state("empty-session")

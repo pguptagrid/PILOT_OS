@@ -1,5 +1,9 @@
-import pytest, asyncio, time
+import time
+
+import pytest
+
 from queues.bus import QueueBus, RawAudioChunk
+
 
 @pytest.mark.asyncio
 async def test_queue_backpressure():
@@ -14,6 +18,7 @@ async def test_queue_backpressure():
         except Exception:
             break
     assert chunks_added == bus.raw_audio_q.maxsize
+
 
 @pytest.mark.asyncio
 async def test_emit_event():

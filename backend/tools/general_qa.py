@@ -3,7 +3,10 @@ General Q&A tool — answers open-ended questions via Ollama (local), Gemini, or
 Returns spoken_reply so bg_supervisor skips the extra generate_reply call.
 Priority: Gemini (if key set) → Groq (if key set) → Ollama (always available locally)
 """
-import asyncio, logging
+
+import asyncio
+import logging
+
 from backend.core.config import settings
 
 logger = logging.getLogger("pilot.tools.general_qa")
@@ -21,10 +24,9 @@ async def general_qa(args: dict, session_id: str) -> dict:
         return {"spoken_reply": "I didn't catch your question. Could you repeat that?"}
 
     reply = (
-        await _try_ollama(query) 
+        await _try_ollama(query)
         or await _try_groq(query)
         or await _try_gemini(query)
-        
         or "Sorry, I wasn't able to answer that right now. Please try again."
     )
 
@@ -35,16 +37,20 @@ async def general_qa(args: dict, session_id: str) -> dict:
 async def _try_ollama(query: str) -> str | None:
     """Local Ollama fallback — always available when Ollama is running."""
     try:
+
         def _call() -> str:
             import ollama
+
             response = ollama.chat(
                 model=settings.OLLAMA_MODEL,
                 messages=[
                     {"role": "system", "content": GENERAL_QA_PROMPT},
-                    {"role": "user",   "content": query},
+                    {"role": "user", "content": query},
                 ],
-                think=False,               # disable Qwen3 thinking — fast spoken answers
-                options={"num_predict": 1024},  # Allow enough tokens for complete code blocks and explanations
+                think=False,  # disable Qwen3 thinking — fast spoken answers
+                options={
+                    "num_predict": 1024
+                },  # Allow enough tokens for complete code blocks and explanations
                 stream=False,
             )
             if isinstance(response, dict):
@@ -64,6 +70,7 @@ async def _try_gemini(query: str) -> str | None:
         return None
     try:
         import google.generativeai as genai
+
         genai.configure(api_key=settings.GEMINI_API_KEY)
         model = genai.GenerativeModel(
             "gemini-pro",
@@ -81,12 +88,13 @@ async def _try_groq(query: str) -> str | None:
         return None
     try:
         from groq import AsyncGroq
+
         client = AsyncGroq(api_key=settings.GROQ_API_KEY)
         resp = await client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[
                 {"role": "system", "content": GENERAL_QA_PROMPT},
-                {"role": "user",   "content": query},
+                {"role": "user", "content": query},
             ],
             max_tokens=1024,
         )

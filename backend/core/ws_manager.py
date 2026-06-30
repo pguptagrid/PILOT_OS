@@ -1,9 +1,11 @@
 """
 WebSocket connection pool — tracks all live /ws/events connections per session.
 """
-from fastapi import WebSocket
+
 import json
 import logging
+
+from fastapi import WebSocket
 
 logger = logging.getLogger("pilot.ws_manager")
 

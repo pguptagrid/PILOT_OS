@@ -1,26 +1,27 @@
-from fastapi import APIRouter, Depends, HTTPException, Header
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, func
-from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime
 
+from fastapi import APIRouter, Depends, Header, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.core.security import decode_token
 from backend.db.engine import get_db
 from backend.db.models import Group, GroupMember, User
-from backend.core.security import decode_token
 
 router = APIRouter()
+
 
 async def get_current_user_id(authorization: str = Header(...)) -> int:
     try:
         # fast API automatically inspectes the incoming HTTP request headers. by naming the parameter authorization and typing it as a Header.
-        # Bearer token. 
+        # Bearer token.
 
         token = authorization.split(" ")[1]
 
         payload = decode_token(token)
         # subject claim is used to identify the user (primary key)
-        
+
         return int(payload["sub"])
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token or authorization header format")
@@ -36,7 +37,7 @@ class GroupCreateReq(BaseModel):
 async def create_group(
     req: GroupCreateReq,
     db: AsyncSession = Depends(get_db),
-    current_user_id: int = Depends(get_current_user_id)
+    current_user_id: int = Depends(get_current_user_id),
 ):
     if not req.name.strip():
         raise HTTPException(status_code=400, detail="Group name cannot be empty")
@@ -45,18 +46,14 @@ async def create_group(
     new_group = Group(
         name=req.name.strip(),
         description=req.description.strip() if req.description else None,
-        created_by=current_user_id
+        created_by=current_user_id,
     )
     db.add(new_group)
     await db.commit()
     await db.refresh(new_group)
 
     # 2. Add creator as admin
-    creator_member = GroupMember(
-        group_id=new_group.id,
-        user_id=current_user_id,
-        role="admin"
-    )
+    creator_member = GroupMember(group_id=new_group.id, user_id=current_user_id, role="admin")
     db.add(creator_member)
 
     # 3. Add other invited members
@@ -66,11 +63,7 @@ async def create_group(
         # Verify user exists
         user_exists = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
         if user_exists:
-            member = GroupMember(
-                group_id=new_group.id,
-                user_id=uid,
-                role="member"
-            )
+            member = GroupMember(group_id=new_group.id, user_id=uid, role="member")
             db.add(member)
 
     await db.commit()
@@ -80,14 +73,13 @@ async def create_group(
         "name": new_group.name,
         "description": new_group.description,
         "created_by": new_group.created_by,
-        "created_at": str(new_group.created_at)
+        "created_at": str(new_group.created_at),
     }
 
 
 @router.get("")
 async def list_groups(
-    db: AsyncSession = Depends(get_db),
-    current_user_id: int = Depends(get_current_user_id)
+    db: AsyncSession = Depends(get_db), current_user_id: int = Depends(get_current_user_id)
 ):
     # Find all groups where current_user_id is a member
     query = (
@@ -106,29 +98,33 @@ async def list_groups(
         cnt_res = await db.execute(cnt_query)
         member_count = cnt_res.scalar() or 0
 
-        result.append({
-            "id": g.id,
-            "name": g.name,
-            "description": g.description,
-            "created_by": g.created_by,
-            "created_at": str(g.created_at),
-            "member_count": member_count
-        })
+        result.append(
+            {
+                "id": g.id,
+                "name": g.name,
+                "description": g.description,
+                "created_by": g.created_by,
+                "created_at": str(g.created_at),
+                "member_count": member_count,
+            }
+        )
 
     return result
 
 
 @router.get("/{group_id}/members")
 async def list_group_members(
-    group_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user_id: int = Depends(get_current_user_id)
+    group_id: int, db: AsyncSession = Depends(get_db), current_user_id: int = Depends(get_current_user_id)
 ):
     # Verify current user is a member of the group
-    is_mem = (await db.execute(
-        select(GroupMember).where(GroupMember.group_id == group_id, GroupMember.user_id == current_user_id)
-    )).scalar_one_or_none()
-    
+    is_mem = (
+        await db.execute(
+            select(GroupMember).where(
+                GroupMember.group_id == group_id, GroupMember.user_id == current_user_id
+            )
+        )
+    ).scalar_one_or_none()
+
     if not is_mem:
         raise HTTPException(status_code=403, detail="You are not a member of this group")
 
@@ -142,10 +138,7 @@ async def list_group_members(
     res = await db.execute(query)
     members = res.all()
 
-    return [
-        {"id": m[0], "name": m[1], "email": m[2], "role": m[3]}
-        for m in members
-    ]
+    return [{"id": m[0], "name": m[1], "email": m[2], "role": m[3]} for m in members]
 
 
 class AddMembersReq(BaseModel):
@@ -157,21 +150,27 @@ async def add_group_members(
     group_id: int,
     req: AddMembersReq,
     db: AsyncSession = Depends(get_db),
-    current_user_id: int = Depends(get_current_user_id)
+    current_user_id: int = Depends(get_current_user_id),
 ):
     # Verify requester is an admin in the group
-    requester_mem = (await db.execute(
-        select(GroupMember).where(GroupMember.group_id == group_id, GroupMember.user_id == current_user_id)
-    )).scalar_one_or_none()
+    requester_mem = (
+        await db.execute(
+            select(GroupMember).where(
+                GroupMember.group_id == group_id, GroupMember.user_id == current_user_id
+            )
+        )
+    ).scalar_one_or_none()
 
     if not requester_mem or requester_mem.role != "admin":
         raise HTTPException(status_code=403, detail="Only group admins can add new members")
 
     for uid in req.user_ids:
         # Check if already a member
-        exists = (await db.execute(
-            select(GroupMember).where(GroupMember.group_id == group_id, GroupMember.user_id == uid)
-        )).scalar_one_or_none()
+        exists = (
+            await db.execute(
+                select(GroupMember).where(GroupMember.group_id == group_id, GroupMember.user_id == uid)
+            )
+        ).scalar_one_or_none()
 
         if not exists:
             # Verify user exists in database
@@ -188,12 +187,16 @@ async def remove_group_member(
     group_id: int,
     user_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user_id: int = Depends(get_current_user_id)
+    current_user_id: int = Depends(get_current_user_id),
 ):
     # Verify requester is either the user themselves (leaving), or an admin
-    requester_mem = (await db.execute(
-        select(GroupMember).where(GroupMember.group_id == group_id, GroupMember.user_id == current_user_id)
-    )).scalar_one_or_none()
+    requester_mem = (
+        await db.execute(
+            select(GroupMember).where(
+                GroupMember.group_id == group_id, GroupMember.user_id == current_user_id
+            )
+        )
+    ).scalar_one_or_none()
 
     if not requester_mem:
         raise HTTPException(status_code=403, detail="You are not a member of this group")
@@ -203,9 +206,11 @@ async def remove_group_member(
         raise HTTPException(status_code=403, detail="Only admins can remove other members")
 
     # Delete membership
-    target_mem = (await db.execute(
-        select(GroupMember).where(GroupMember.group_id == group_id, GroupMember.user_id == user_id)
-    )).scalar_one_or_none()
+    target_mem = (
+        await db.execute(
+            select(GroupMember).where(GroupMember.group_id == group_id, GroupMember.user_id == user_id)
+        )
+    ).scalar_one_or_none()
 
     if target_mem:
         await db.delete(target_mem)

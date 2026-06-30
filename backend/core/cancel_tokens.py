@@ -1,6 +1,7 @@
 """
 Concurrency cancel tokens — cancel TTS or background jobs on barge-in.
 """
+
 import asyncio
 import logging
 
@@ -14,7 +15,8 @@ def register_tts(task: asyncio.Task):
     global _tts_task
     _tts_task = task
 
-#If the assistant is reading a long response and you speak or say "Stop" or "Wait", the system immediately calls cancel_tts(). 
+
+# If the assistant is reading a long response and you speak or say "Stop" or "Wait", the system immediately calls cancel_tts().
 def cancel_tts():
     global _tts_task
     if _tts_task and not _tts_task.done():

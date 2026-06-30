@@ -2,19 +2,22 @@
 Per-session pipeline state — ring buffer, speaker context, TTS flag.
 Persisted to SQLite on demand for reconnect support (Feature 2).
 """
+
+import asyncio
+import json
+import logging
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional
-import json, logging, asyncio
 
 logger = logging.getLogger("pilot.session_state")
+
 
 @dataclass
 class SessionPipelineState:
     session_id: str
     # sliding wondow of the most recent conversation transcript lines, providing immediate context of what was said.
     ring_buffer: deque = field(default_factory=lambda: deque(maxlen=50))
-    
 
     current_speaker: Optional[str] = None
     current_role: Optional[str] = None
@@ -22,12 +25,12 @@ class SessionPipelineState:
     tts_playing: bool = False
     tts_start_time: float = 0.0
     # Tracks exactly when TTS playback started to prevent early microphone echo barge-ins
-    active_tts_task: Optional[asyncio.Task] = None  
+    active_tts_task: Optional[asyncio.Task] = None
     # Use case determines the assistant's goal (e.g., general chat, coding, or customer support) - this is used to customize the LLM's behavior.
     usecase: str = "general"
     # Gate ambient pipeline with a voice wake-word ('hey pilot' / 'stop')
-    ambient_listening_active: bool = False 
-    
+    ambient_listening_active: bool = False
+
     # Live manually typed context from frontend to override voice queries
     typed_origin: str = ""
     typed_destination: str = ""
@@ -41,26 +44,28 @@ class SessionPipelineState:
     pending_email_cc_bcc: str = ""
     session_participants: dict = field(default_factory=dict)
 
-    #Appends a new transcript line to the rolling conversation ring_buffer.
+    # Appends a new transcript line to the rolling conversation ring_buffer.
 
     def add_span(self, span: dict):
         self.ring_buffer.append(span)
 
-    #Extracts the last n conversation lines to send to the LLM as context for generating intelligent replies.
+    # Extracts the last n conversation lines to send to the LLM as context for generating intelligent replies.
     def get_context(self, n: int = 10) -> list[dict]:
         return list(self.ring_buffer)[-n:]
 
-    #Converts critical session state values (history, speaker name, active usecase, etc.) into a JSON string.
+    # Converts critical session state values (history, speaker name, active usecase, etc.) into a JSON string.
     def to_snapshot(self) -> str:
-        return json.dumps({
-            "ring_buffer": list(self.ring_buffer),
-            "current_speaker": self.current_speaker,
-            "current_role": self.current_role,
-            "usecase": self.usecase,
-            "ambient_listening_active": self.ambient_listening_active,
-        })
+        return json.dumps(
+            {
+                "ring_buffer": list(self.ring_buffer),
+                "current_speaker": self.current_speaker,
+                "current_role": self.current_role,
+                "usecase": self.usecase,
+                "ambient_listening_active": self.ambient_listening_active,
+            }
+        )
 
-    #Parses a JSON string to rebuild a complete SessionPipelineState object, restoring memory instantly.
+    # Parses a JSON string to rebuild a complete SessionPipelineState object, restoring memory instantly.
     @classmethod
     def from_snapshot(cls, session_id: str, snapshot: str) -> "SessionPipelineState":
         data = json.loads(snapshot)
@@ -85,16 +90,19 @@ def get_state(session_id: str) -> SessionPipelineState:
 def clear_state(session_id: str):
     _states.pop(session_id, None)
 
-#Writes the JSON snapshot of the session state into the snapshot column of the SQLite database.
+
+# Writes the JSON snapshot of the session state into the snapshot column of the SQLite database.
 async def persist_state(session_id: str):
     """Save ring buffer to SQLite so reconnects restore context."""
     state = _states.get(session_id)
     if not state:
         return
     try:
+        from sqlalchemy import select
+
         from backend.db.engine import AsyncSessionLocal
         from backend.db.models import Session
-        from sqlalchemy import select
+
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(Session).where(Session.session_id == session_id))
             s = result.scalar_one_or_none()
@@ -104,13 +112,16 @@ async def persist_state(session_id: str):
     except Exception as e:
         logger.error(f"persist_state error: {e}")
 
-#Fetches the snapshot from SQLite upon a user reconnecting, and initializes the in-memory _states dictionary with it.
+
+# Fetches the snapshot from SQLite upon a user reconnecting, and initializes the in-memory _states dictionary with it.
 async def restore_state(session_id: str) -> bool:
     """Restore ring buffer from SQLite on WS reconnect."""
     try:
+        from sqlalchemy import select
+
         from backend.db.engine import AsyncSessionLocal
         from backend.db.models import Session
-        from sqlalchemy import select
+
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(Session).where(Session.session_id == session_id))
             s = result.scalar_one_or_none()
@@ -121,4 +132,3 @@ async def restore_state(session_id: str) -> bool:
     except Exception as e:
         logger.error(f"restore_state error: {e}")
     return False
-

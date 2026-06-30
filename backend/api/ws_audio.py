@@ -1,7 +1,11 @@
 """WebSocket /ws/audio — receives raw PCM from browser."""
+
+import logging
+import time
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from backend.queues.bus import bus, RawAudioChunk
-import time, logging
+
+from backend.queues.bus import RawAudioChunk, bus
 
 router = APIRouter()
 logger = logging.getLogger("pilot.ws.audio")
@@ -15,6 +19,7 @@ async def ws_audio(websocket: WebSocket, session_id: str):
     name = websocket.query_params.get("name")
     if email and name:
         from backend.core.session_state import get_state
+
         state = get_state(session_id)
         if not hasattr(state, "session_participants"):
             state.session_participants = {}
@@ -22,17 +27,22 @@ async def ws_audio(websocket: WebSocket, session_id: str):
         logger.info(f"[{session_id[:6]}] Registered WS audio participant: {name} ({email})")
 
     # Register session as LISTENING
-    from backend.core.session_manager import session_manager, SessionState
+    from backend.core.session_manager import SessionState, session_manager
     from backend.core.session_state import get_state
+
     if not session_manager.get(session_id):
+        from sqlalchemy import select
+
         from backend.db.engine import AsyncSessionLocal
         from backend.db.models import Session as PilotSession
-        from sqlalchemy import select
+
         db_user_id = 0
         usecase = "unknown"
         try:
             async with AsyncSessionLocal() as db:
-                s = (await db.execute(select(PilotSession).where(PilotSession.session_id == session_id))).scalar_one_or_none()
+                s = (
+                    await db.execute(select(PilotSession).where(PilotSession.session_id == session_id))
+                ).scalar_one_or_none()
                 if s:
                     db_user_id = s.user_id or 0
                     usecase = s.usecase
@@ -46,7 +56,7 @@ async def ws_audio(websocket: WebSocket, session_id: str):
         while True:
             data = await websocket.receive_bytes()
             chunk = RawAudioChunk(pcm=data, session_id=session_id, timestamp=time.time())
-            
+
             # ── BARGE-IN / INTERRUPTION TRIGGER ──
             # When the user starts speaking while PILOT is outputting TTS,
             # trigger an instantaneous interruption event to cut the audio off immediately.
@@ -58,20 +68,25 @@ async def ws_audio(websocket: WebSocket, session_id: str):
                 if time.time() - state.tts_start_time > grace_window:
                     # Calculate Root Mean Square (RMS) energy to verify active speech (ignoring silent/ambient frames)
                     import numpy as np
+
                     try:
                         audio_data = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-                        rms = float((audio_data ** 2).mean() ** 0.5) if len(audio_data) > 0 else 0.0
+                        rms = float((audio_data**2).mean() ** 0.5) if len(audio_data) > 0 else 0.0
                     except Exception:
                         rms = 0.0
 
                     if rms > 0.025:  # threshold for active speech interruption
                         state.tts_playing = False
                         state.barge_in = True
-                        logger.info(f"[{session_id[:6]}] Interruption detected (RMS: {rms:.4f})! Emitting barge_in event to client.")
+                        logger.info(
+                            f"[{session_id[:6]}] Interruption detected (RMS: {rms:.4f})! Emitting barge_in event to client."
+                        )
                         await bus.emit_event("barge_in", {}, session_id)
                 else:
-                    logger.debug(f"[{session_id[:6]}] Ignoring early mic frame during 600ms TTS startup grace window.")
-                
+                    logger.debug(
+                        f"[{session_id[:6]}] Ignoring early mic frame during 600ms TTS startup grace window."
+                    )
+
             try:
                 bus.raw_audio_q.put_nowait(chunk)
             except Exception:

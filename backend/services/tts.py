@@ -2,21 +2,31 @@
 TTS — Kokoro ONNX local primary (from capstone_project1_2) → edge-tts → macOS say → espeak-ng.
 All output is audio/wav or audio/mp3 — universally supported by browsers.
 """
-#postpones the evaluation of type annotations, converting them into plain strings at runtime instead of evaluating them immediately
-
+# postpones the evaluation of type annotations, converting them into plain strings at runtime instead of evaluating them immediately
 
 from __future__ import annotations
-import asyncio, io, logging, subprocess, tempfile, os, platform
+
+import asyncio
+import io
+import logging
+import os
+import platform
+import subprocess
+import tempfile
+
 import numpy as np
+
 from backend.core.config import settings
+
 logger = logging.getLogger("pilot.tts")
 
-_OS = platform.system()  
+_OS = platform.system()
 
 # ── Local Kokoro Initialization ──────────────────────────────────────────────
 _kokoro_instance = None
 try:
     from kokoro_onnx import Kokoro
+
     # Check model locations in backend directory
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     model_path = os.path.join(base_dir, "kokoro-v1.0.onnx")
@@ -24,6 +34,7 @@ try:
     if os.path.exists(model_path) and os.path.exists(voices_path):
         # onnx : a high-performance engine designed to accelerate machine learning and generative AI models in production.
         import onnxruntime as ort
+
         # Dynamically allocate CoreML GPU Acceleration or CPU depending on hardware preferences
         device_pref = getattr(settings, "PREFERRED_DEVICE", "cpu").lower()
         if device_pref == "mps" and "CoreMLExecutionProvider" in ort.get_available_providers():
@@ -32,12 +43,14 @@ try:
         else:
             providers = ["CPUExecutionProvider"]
             logger.info(f"Local Kokoro ONNX routing computation to CPU (preferred_device={device_pref}) ✓")
-            
+
         _kokoro_session = ort.InferenceSession(model_path, providers=providers)
         _kokoro_instance = Kokoro.from_session(_kokoro_session, voices_path)
         logger.info("Local Kokoro ONNX engine initialized successfully!")
     else:
-        logger.warning(f"Kokoro ONNX files missing from backend folder (checked: {model_path}, {voices_path}). Falling back.")
+        logger.warning(
+            f"Kokoro ONNX files missing from backend folder (checked: {model_path}, {voices_path}). Falling back."
+        )
 except Exception as e:
     logger.warning(f"Failed to load Kokoro ONNX: {e}")
 
@@ -52,24 +65,25 @@ def _float32_to_int16_bytes(audio: np.ndarray) -> bytes:
 async def _kokoro_tts(text: str, speed: float = 1.0) -> bytes:
     if not _kokoro_instance:
         raise RuntimeError("Kokoro not initialized")
-    
+
     # Generate PCM from local model
     def _gen():
-        # sr : sampling rate. 
+        # sr : sampling rate.
         samples, sr = _kokoro_instance.create(text, voice="af_heart", speed=speed, lang="en-us")
         return _float32_to_int16_bytes(samples), sr
-        
+
     pcm_bytes, sr = await asyncio.to_thread(_gen)
-    
+
     # Wrap raw PCM into a standard WAV container
     import wave
+
     wav_buf = io.BytesIO()
     with wave.open(wav_buf, "wb") as wav_file:
         wav_file.setnchannels(1)  # Mono
-        wav_file.setsampwidth(2)   # 16-bit
-        wav_file.setframerate(sr) # Sample rate (typically 24000)
+        wav_file.setsampwidth(2)  # 16-bit
+        wav_file.setframerate(sr)  # Sample rate (typically 24000)
         wav_file.writeframes(pcm_bytes)
-        
+
     return wav_buf.getvalue()
 
 
@@ -86,9 +100,11 @@ _EDGE_VOICES: dict[str, str] = {
     "ko": "ko-KR-SunHiNeural",
 }
 
+
 def _detect_lang(text: str) -> str:
     try:
-        from langdetect import detect_langs, DetectorFactory
+        from langdetect import DetectorFactory, detect_langs
+
         DetectorFactory.seed = 0
         r = detect_langs(text)
         if r and r[0].prob > 0.6:
@@ -96,6 +112,7 @@ def _detect_lang(text: str) -> str:
     except Exception:
         pass
     return "en"
+
 
 def _speed_str(speed: float) -> str:
     pct = int((speed - 1.0) * 100)
@@ -111,9 +128,11 @@ def _speed_str(speed: float) -> str:
 #        ↓ fails
 #   → return empty bytes
 
+
 # ── Tier 1: edge-tts (MP3) ────────────────────────────────────────────────────
 async def _edge_tts(text: str, speed: float) -> bytes:
     import edge_tts
+
     voice = _EDGE_VOICES.get(_detect_lang(text), "en-US-AriaNeural")
     communicate = edge_tts.Communicate(text, voice, rate=_speed_str(speed))
     buf = io.BytesIO()
@@ -125,21 +144,26 @@ async def _edge_tts(text: str, speed: float) -> bytes:
         raise RuntimeError("empty")
     return data  # MP3
 
+
 # ── Tier 2: macOS say → afconvert to WAV ─────────────────────────────────────
 def _macos_say_sync(text: str) -> bytes:
     """say outputs AIFF, afconvert converts to WAV (both built-in macOS tools)."""
     aiff = tempfile.mktemp(suffix=".aiff")
-    wav  = tempfile.mktemp(suffix=".wav")
+    wav = tempfile.mktemp(suffix=".wav")
     try:
         # Generate AIFF
         subprocess.run(
             ["say", "-v", "Samantha", "-r", "185", "-o", aiff, text],
-            check=True, capture_output=True, timeout=15
+            check=True,
+            capture_output=True,
+            timeout=15,
         )
         # Convert AIFF → WAV (afconvert is built into macOS)
         subprocess.run(
             ["afconvert", "-f", "WAVE", "-d", "LEI16@22050", aiff, wav],
-            check=True, capture_output=True, timeout=10
+            check=True,
+            capture_output=True,
+            timeout=10,
         )
         with open(wav, "rb") as f:
             data = f.read()
@@ -152,8 +176,10 @@ def _macos_say_sync(text: str) -> bytes:
             if os.path.exists(p):
                 os.unlink(p)
 
+
 async def _macos_tts(text: str) -> bytes:
     return await asyncio.to_thread(_macos_say_sync, text)
+
 
 # ── Tier 3: espeak-ng WAV (Linux) ─────────────────────────────────────────────
 def _espeak_sync(text: str) -> bytes:
@@ -161,7 +187,9 @@ def _espeak_sync(text: str) -> bytes:
     try:
         subprocess.run(
             ["espeak-ng", "-v", "en", "-s", "175", "-p", "50", "-w", wav, text],
-            check=True, capture_output=True, timeout=15
+            check=True,
+            capture_output=True,
+            timeout=15,
         )
         with open(wav, "rb") as f:
             data = f.read()
@@ -172,11 +200,14 @@ def _espeak_sync(text: str) -> bytes:
         if os.path.exists(wav):
             os.unlink(wav)
 
+
 async def _espeak_tts(text: str) -> bytes:
     return await asyncio.to_thread(_espeak_sync, text)
 
+
 def clean_markdown_for_speech(text: str) -> str:
     import re
+
     # 1. Remove code blocks entirely (spoken responses shouldn't read out raw code blocks)
     text = re.sub(r"```[\s\S]*?```", "", text)
     # 2. Convert markdown links [text](url) -> text
@@ -204,7 +235,8 @@ def clean_markdown_for_speech(text: str) -> str:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-# this function converts input string of text into raw audio file bytes. it uses a 4-tier cascading fallback system to insure the application always returns palyback audio, even if individual AI models fails or the host machine goes offline. 
+
+# this function converts input string of text into raw audio file bytes. it uses a 4-tier cascading fallback system to insure the application always returns palyback audio, even if individual AI models fails or the host machine goes offline.
 async def tts_to_bytes(text: str, speed: float = 1.1) -> tuple[bytes, str]:
     """Always returns audio/wav — supported by all browsers."""
     if not text.strip():
@@ -237,14 +269,16 @@ async def tts_to_bytes(text: str, speed: float = 1.1) -> tuple[bytes, str]:
     # Tier 3/4: system TTS → WAV
     try:
         if _OS == "Darwin":
-            return await _macos_tts(cleaned_text if 'cleaned' in locals() else text), "audio/wav"
+            return await _macos_tts(cleaned_text if "cleaned" in locals() else text), "audio/wav"
         else:
-            return await _espeak_tts(cleaned_text if 'cleaned' in locals() else text), "audio/wav"
+            return await _espeak_tts(cleaned_text if "cleaned" in locals() else text), "audio/wav"
     except Exception as e:
         logger.error(f"System fallback TTS failed: {e}")
         return b"", "audio/wav"
 
+
 # this function is used to stream the audio to the frontend using FastAPI's streaming capability.
+
 
 async def tts_synthesize(text: str):
     data, _ = await tts_to_bytes(text)

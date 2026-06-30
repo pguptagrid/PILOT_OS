@@ -1,16 +1,23 @@
 # api router create api routes
-#depends : dependency injection
-#file : receive upload file
-# uploadfile -> uploaded file object. 
+# depends : dependency injection
+# file : receive upload file
+# uploadfile -> uploaded file object.
 
 
-from fastapi import APIRouter, Depends, HTTPException, Form, File, UploadFile, Header
+# run CPU heavy task in another thread.
+import asyncio
 
-# database operations
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+# create logs
+import logging
 
-#Pydantic is Python's most popular data validation and parsing library or validates incoming JSON data. 
+# basemodel : imports the core class used for data validation and parsing in Python
+# emailStr: standard statement used to import the specialized email validation type.
+from datetime import datetime, timedelta
+from typing import List
+
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+
+# Pydantic is Python's most popular data validation and parsing library or validates incoming JSON data.
 # Now if the client sends
 # {
 #    "email":"abc",
@@ -19,33 +26,29 @@ from sqlalchemy import select
 # FastAPI automatically checks
 # email format
 # password type
-
 from pydantic import BaseModel, EmailStr
-# basemodel : imports the core class used for data validation and parsing in Python
-# emailStr: standard statement used to import the specialized email validation type.
-from datetime import datetime, timedelta
-from typing import List
+from sqlalchemy import select
 
-# run CPU heavy task in another thread. 
-import asyncio
+# database operations
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# create logs
-import logging
-
-from backend.db.engine import get_db # create a database
-from backend.db.models import User, VoiceEnrollment # models
-from backend.core.security import hash_password, verify_password, create_token, gen_otp, decode_token 
-
+from backend.core.security import create_token, decode_token, gen_otp, hash_password, verify_password
+from backend.db.engine import get_db  # create a database
+from backend.db.models import User, VoiceEnrollment  # models
 
 router = APIRouter()
 logger = logging.getLogger("pilot.api.auth")
 
 
 class LoginReq(BaseModel):
-    email: EmailStr; password: str
+    email: EmailStr
+    password: str
+
 
 class OtpVerifyReq(BaseModel):
-    email: EmailStr; otp: str
+    email: EmailStr
+    otp: str
+
 
 class OtpSendReq(BaseModel):
     email: EmailStr
@@ -63,16 +66,17 @@ async def signup(
     password: str = Form(...),
     role: str = Form("developer"),
     audio: List[UploadFile] = File(...),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     # Check if user already exists and is active in database
     exists = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
     if exists:
         raise HTTPException(400, "Email already registered. Please sign in.")
-    
+
     # Extract embeddings for all 3 uploaded audio segments and calculate the Average (Mean) embedding vector
-    from backend.services.enrollment import embed_provider
     import numpy as np
+
+    from backend.services.enrollment import embed_provider
 
     embeddings = []
     for aud in audio:
@@ -105,7 +109,7 @@ async def signup(
         "role": role,
         "otp": otp,
         "otp_expiry": datetime.now() + timedelta(minutes=10),
-        "embedding": final_embedding.tobytes()
+        "embedding": final_embedding.tobytes(),
     }
     await _send_otp(email, otp)
     return {"message": "OTP sent", "email": email}
@@ -114,11 +118,11 @@ async def signup(
 @router.post("/send-otp")
 async def send_otp(req: OtpSendReq, db: AsyncSession = Depends(get_db)):
     pending = PENDING_SIGNUPS.get(req.email)
-    #user is not waiting for signup verification.
+    # user is not waiting for signup verification.
     if not pending:
         # Check actual db in case of re-verifying a legacy inactive user
         user = (await db.execute(select(User).where(User.email == req.email))).scalar_one_or_none()
-        #If both
+        # If both
         # not in PENDING_SIGNUPS
         # not in database
         if not user:
@@ -126,11 +130,11 @@ async def send_otp(req: OtpSendReq, db: AsyncSession = Depends(get_db)):
         # if user already verified.
         if user.is_active:
             raise HTTPException(400, "Account already verified")
-        otp = gen_otp() 
+        otp = gen_otp()
         user.otp = otp
         user.otp_expiry = datetime.utcnow() + timedelta(minutes=10)
-        await db.commit() #changes remain only in memory and won't be written to the database.
-        await _send_otp(req.email, otp) #This helper function sends the generated OTP to the user's email.
+        await db.commit()  # changes remain only in memory and won't be written to the database.
+        await _send_otp(req.email, otp)  # This helper function sends the generated OTP to the user's email.
         return {"message": "OTP resent"}
 
     otp = gen_otp()
@@ -156,14 +160,17 @@ async def verify_otp(req: OtpVerifyReq, db: AsyncSession = Depends(get_db)):
         user.otp = None
         await db.commit()
         token = create_token({"sub": str(user.id), "email": user.email, "role": user.role})
-        return {"access_token": token, "token_type": "bearer",
-                "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role}}
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role},
+        }
 
     if pending["otp"] != req.otp:
         raise HTTPException(400, "Invalid OTP")
     if pending["otp_expiry"] and datetime.utcnow() > pending["otp_expiry"]:
         raise HTTPException(400, "OTP expired")
-    
+
     # OTP is verified successfully! Create actual user in SQLite with best embedding
     user = User(
         name=pending["name"],
@@ -171,28 +178,29 @@ async def verify_otp(req: OtpVerifyReq, db: AsyncSession = Depends(get_db)):
         hashed_pw=pending["hashed_pw"],
         role=pending["role"],
         is_active=True,
-        embedding=pending["embedding"]
+        embedding=pending["embedding"],
     )
     db.add(user)
     await db.commit()
     await db.refresh(user)
 
     # Save to VoiceEnrollment so diarizer and speech logic loads this speaker profile
-    import numpy as np
     import os
-    
+
+    import numpy as np
+
     os.makedirs("data/embeddings", exist_ok=True)
     enroll = VoiceEnrollment(
         user_id=user.id,
         speaker_name=user.name,
         role=user.role,
         embedding=pending["embedding"],
-        status="ready"
+        status="ready",
     )
     db.add(enroll)
     await db.commit()
     await db.refresh(enroll)
-    
+
     # Write matching npy file
     npy_path = f"data/embeddings/speaker_{enroll.id}.npy"
     np.save(npy_path, np.frombuffer(pending["embedding"], dtype=np.float16))
@@ -204,8 +212,17 @@ async def verify_otp(req: OtpVerifyReq, db: AsyncSession = Depends(get_db)):
     PENDING_SIGNUPS.pop(req.email, None)
 
     token = create_token({"sub": str(user.id), "email": user.email, "role": user.role})
-    return {"access_token": token, "token_type": "bearer",
-            "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role, "status": "online"}}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "role": user.role,
+            "status": "online",
+        },
+    }
 
 
 @router.post("/login")
@@ -218,8 +235,17 @@ async def login(req: LoginReq, db: AsyncSession = Depends(get_db)):
     token = create_token({"sub": str(user.id), "email": user.email, "role": user.role})
     user.status = "online"
     await db.commit()
-    return {"access_token": token, "token_type": "bearer",
-            "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role, "status": "online"}}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "role": user.role,
+            "status": "online",
+        },
+    }
 
 
 @router.post("/forgot-password")
@@ -227,12 +253,12 @@ async def forgot_password(req: OtpSendReq, db: AsyncSession = Depends(get_db)):
     user = (await db.execute(select(User).where(User.email == req.email))).scalar_one_or_none()
     if not user:
         raise HTTPException(404, "User not found with this email.")
-    
+
     otp = gen_otp()
     user.otp = otp
     user.otp_expiry = datetime.utcnow() + timedelta(minutes=10)
     await db.commit()
-    
+
     await _send_otp(req.email, otp)
     return {"message": "OTP sent for password recovery", "email": req.email}
 
@@ -242,35 +268,45 @@ async def verify_forgot_otp(req: OtpVerifyReq, db: AsyncSession = Depends(get_db
     user = (await db.execute(select(User).where(User.email == req.email))).scalar_one_or_none()
     if not user:
         raise HTTPException(404, "User not found")
-    
+
     if not user.otp or user.otp != req.otp:
         raise HTTPException(400, "Invalid OTP")
-        
+
     if user.otp_expiry and datetime.utcnow() > user.otp_expiry:
         raise HTTPException(400, "OTP expired")
-        
+
     user.otp = None
     user.otp_expiry = None
     user.is_active = True
     await db.commit()
-    
+
     token = create_token({"sub": str(user.id), "email": user.email, "role": user.role})
-    return {"access_token": token, "token_type": "bearer",
-            "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role}}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role},
+    }
 
 
 @router.get("/users")
 async def list_users(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).order_by(User.name))
     users = result.scalars().all()
-    return [{"id": u.id, "name": u.name, "email": u.email, "role": u.role, "is_active": u.is_active, "status": u.status} for u in users]
+    return [
+        {
+            "id": u.id,
+            "name": u.name,
+            "email": u.email,
+            "role": u.role,
+            "is_active": u.is_active,
+            "status": u.status,
+        }
+        for u in users
+    ]
 
 
 @router.post("/logout")
-async def logout(
-    authorization: str = Header(...),
-    db: AsyncSession = Depends(get_db)
-):
+async def logout(authorization: str = Header(...), db: AsyncSession = Depends(get_db)):
     try:
         token = authorization.split(" ")[1]
         payload = decode_token(token)
@@ -292,9 +328,7 @@ class ProfileUpdateReq(BaseModel):
 
 @router.put("/profile")
 async def update_profile(
-    req: ProfileUpdateReq,
-    authorization: str = Header(...),
-    db: AsyncSession = Depends(get_db)
+    req: ProfileUpdateReq, authorization: str = Header(...), db: AsyncSession = Depends(get_db)
 ):
     try:
         token = authorization.split(" ")[1]
@@ -322,10 +356,9 @@ async def update_profile(
 
     # Also update matching VoiceEnrollment speaker_name if it exists
     from sqlalchemy import update
+
     await db.execute(
-        update(VoiceEnrollment)
-        .where(VoiceEnrollment.user_id == user_id)
-        .values(speaker_name=req.name)
+        update(VoiceEnrollment).where(VoiceEnrollment.user_id == user_id).values(speaker_name=req.name)
     )
     await db.commit()
 
@@ -335,32 +368,26 @@ async def update_profile(
     # Broadcast profile update to all active sessions in real-time
     try:
         from backend.core.ws_manager import broadcast_all
-        await broadcast_all({
-            "type": "profile_updated",
-            "payload": {
-                "user_id": user.id,
-                "name": user.name,
-                "email": user.email
+
+        await broadcast_all(
+            {
+                "type": "profile_updated",
+                "payload": {"user_id": user.id, "name": user.name, "email": user.email},
             }
-        })
+        )
     except Exception as e:
         logger.error(f"Failed to broadcast profile update: {e}")
 
     return {
         "access_token": new_token,
         "token_type": "bearer",
-        "user": {
-            "id": user.id,
-            "name": user.name,
-            "email": user.email,
-            "role": user.role
-        }
+        "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role},
     }
-
 
 
 async def _send_otp(email: str, otp: str):
     from backend.core.config import settings
+
     # Always print to terminal so dev mode always works
     # print(f"\n{'='*48}\nPILOT OTP for {email}: {otp}\n{'='*48}\n")
     logger.info(f"OTP for {email}: {otp}")
@@ -369,14 +396,13 @@ async def _send_otp(email: str, otp: str):
         return  # dev mode — OTP visible in terminal above
 
     try:
-        import smtplib
         from email.mime.multipart import MIMEMultipart
         from email.mime.text import MIMEText
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = "PILOT — Your verification code"
-        msg["From"]    = settings.SMTP_USER
-        msg["To"]      = email
+        msg["From"] = settings.SMTP_USER
+        msg["To"] = email
 
         html = f"""
         <div style="font-family:sans-serif;max-width:480px;margin:40px auto;background:#0A0A0F;
@@ -394,8 +420,13 @@ async def _send_otp(email: str, otp: str):
         msg.attach(MIMEText(html, "html"))
 
         await asyncio.to_thread(
-            _smtp_send, settings.SMTP_HOST, settings.SMTP_PORT,
-            settings.SMTP_USER, settings.SMTP_PASS, email, msg
+            _smtp_send,
+            settings.SMTP_HOST,
+            settings.SMTP_PORT,
+            settings.SMTP_USER,
+            settings.SMTP_PASS,
+            email,
+            msg,
         )
         logger.info(f"OTP email sent to {email}")
 
@@ -405,6 +436,7 @@ async def _send_otp(email: str, otp: str):
 
 def _smtp_send(host, port, user, password, to, msg):
     import smtplib
+
     with smtplib.SMTP(host, port, timeout=10) as server:
         server.ehlo()
         server.starttls()

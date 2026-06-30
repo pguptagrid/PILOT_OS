@@ -5,7 +5,6 @@ Consolidates both ppt.py and ppt_instant.py to eliminate duplication.
 """
 
 
-
 #                                       USER
 #                                         │
 #                      Upload PPT / Navigate / Ask Question
@@ -80,25 +79,31 @@ Consolidates both ppt.py and ppt_instant.py to eliminate duplication.
 #  Browser HTML                  Event Bus / Commands              Summary / Q&A
 # (next/prev/jump)                next, prev, goto                 using metadata
 
-import io
+import asyncio
 import base64
 import html
-import asyncio
+import io
 import json
-import time
+import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
-import logging
+import time
 from typing import List, Optional
-from fastapi import APIRouter, UploadFile, File, HTTPException, Header
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
-import re
 
-
-from backend.core.slide_store import _slide_store, _current_slide, set_latest_upload_sid, get_latest_upload_sid, resolve_sid
+from backend.core.slide_store import (
+    _current_slide,
+    _slide_store,
+    get_latest_upload_sid,
+    resolve_sid,
+    set_latest_upload_sid,
+)
 
 router = APIRouter()
 logger = logging.getLogger("pilot.api.ppt")
@@ -107,6 +112,7 @@ logger = logging.getLogger("pilot.api.ppt")
 # ============================================================
 # MODELS
 # ============================================================
+
 
 class PPTCmd(BaseModel):
     session_id: str
@@ -129,8 +135,8 @@ class CreateCmd(BaseModel):
 # RENDERERS & METADATA HELPERS
 # ============================================================
 
-def _slide_to_png_b64(slide, prs_w: int, prs_h: int,
-                       width_px: int = 960, height_px: int = 540) -> str:
+
+def _slide_to_png_b64(slide, prs_w: int, prs_h: int, width_px: int = 960, height_px: int = 540) -> str:
     """Render one slide to a base64-encoded PNG string using PyMuPDF (no cairosvg/cairo dependency)."""
     import fitz
 
@@ -151,8 +157,8 @@ def _slide_to_png_b64(slide, prs_w: int, prs_h: int,
     for shape in slide.shapes:
         if not shape.has_text_frame:
             continue
-        x = int(shape.left  * scale_x)
-        y = int(shape.top   * scale_y)
+        x = int(shape.left * scale_x)
+        y = int(shape.top * scale_y)
 
         cursor_y = y + 22
         for para in shape.text_frame.paragraphs:
@@ -163,8 +169,10 @@ def _slide_to_png_b64(slide, prs_w: int, prs_h: int,
 
             font_size, bold, color = 18, False, "#ffffff"
             try:
-                if para.font.size:  font_size = int(para.font.size.pt)
-                if para.font.bold:  bold = True
+                if para.font.size:
+                    font_size = int(para.font.size.pt)
+                if para.font.bold:
+                    bold = True
                 if para.font.color and para.font.color.type:
                     rgb = para.font.color.rgb
                     color = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
@@ -173,16 +181,18 @@ def _slide_to_png_b64(slide, prs_w: int, prs_h: int,
             # A paragraph may contain mixed formatting
             for run in para.runs:
                 try:
-                    if run.font.size:  font_size = int(run.font.size.pt)
-                    if run.font.bold:  bold = True
+                    if run.font.size:
+                        font_size = int(run.font.size.pt)
+                    if run.font.bold:
+                        bold = True
                     if run.font.color and run.font.color.type:
                         rgb = run.font.color.rgb
                         color = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
                 except Exception:
                     pass
 
-            fs  = max(int(font_size * min(scale_x, scale_y) * 0.85), 8)
-            fw  = "bold" if bold else "normal"
+            fs = max(int(font_size * min(scale_x, scale_y) * 0.85), 8)
+            fw = "bold" if bold else "normal"
             safe = html.escape(raw)
             # Wrap long text with tspan elements
             words = safe.split()
@@ -197,10 +207,10 @@ def _slide_to_png_b64(slide, prs_w: int, prs_h: int,
 
             for line in lines:
                 text_els += (
-                    f'<text x="{x+6}" y="{cursor_y}" '
+                    f'<text x="{x + 6}" y="{cursor_y}" '
                     f'font-size="{fs}" font-weight="{fw}" fill="{color}" '
                     f'font-family="Inter,Arial,sans-serif">'
-                    f'{line}</text>\n'
+                    f"{line}</text>\n"
                 )
                 cursor_y += int(fs * 1.45)
             cursor_y += 4
@@ -209,10 +219,10 @@ def _slide_to_png_b64(slide, prs_w: int, prs_h: int,
         f'<svg xmlns="http://www.w3.org/2000/svg" '
         f'width="{width_px}" height="{height_px}">'
         f'<rect width="{width_px}" height="{height_px}" fill="{bg_color}"/>'
-        f'{text_els}'
-        f'</svg>'
+        f"{text_els}"
+        f"</svg>"
     )
-    
+
     # Render SVG directly to PNG in memory using PyMuPDF (completely self-contained, no native cairo library needed)
     try:
         svg_doc = fitz.open("svg", svg.encode("utf-8"))
@@ -264,7 +274,11 @@ def _extract_slide_meta(slide, index: int, prs_w: int, prs_h: int) -> dict:
                 continue
             if shape_text == title:
                 continue
-            if any(k in shape_text for k in ["Grid Dynamics", "PILOT Voice OS"]) or shape_text.startswith("Topic:") or shape_text.startswith("Slide "):
+            if (
+                any(k in shape_text for k in ["Grid Dynamics", "PILOT Voice OS"])
+                or shape_text.startswith("Topic:")
+                or shape_text.startswith("Slide ")
+            ):
                 continue
 
             # Extract paragraphs as individual bullets
@@ -273,9 +287,13 @@ def _extract_slide_meta(slide, index: int, prs_w: int, prs_h: int) -> dict:
                 if not p_text:
                     continue
                 # Clean leading bullet symbols: •, *, -, etc.
-                p_cleaned = re.sub(r'^[•\-\*\s·]+', '', p_text).strip()
+                p_cleaned = re.sub(r"^[•\-\*\s·]+", "", p_text).strip()
                 if p_cleaned and p_cleaned != title:
-                    if not any(k in p_cleaned for k in ["Grid Dynamics", "PILOT Voice OS"]) and not p_cleaned.startswith("Topic:") and not p_cleaned.startswith("Slide "):
+                    if (
+                        not any(k in p_cleaned for k in ["Grid Dynamics", "PILOT Voice OS"])
+                        and not p_cleaned.startswith("Topic:")
+                        and not p_cleaned.startswith("Slide ")
+                    ):
                         bullets.append(p_cleaned)
 
     notes = ""
@@ -286,10 +304,10 @@ def _extract_slide_meta(slide, index: int, prs_w: int, prs_h: int) -> dict:
         pass
 
     return {
-        "index":   index,
-        "title":   title or f"Slide {index + 1}",
+        "index": index,
+        "title": title or f"Slide {index + 1}",
         "bullets": bullets[:10],
-        "notes":   notes,
+        "notes": notes,
     }
 
 
@@ -297,7 +315,11 @@ def _get_libreoffice_path() -> str | None:
     """Resolves headless soffice executable binary path across platforms."""
     soffice_path = shutil.which("soffice") or shutil.which("libreoffice")
     if not soffice_path:
-        for p in ["/Applications/LibreOffice.app/Contents/MacOS/soffice", "/opt/homebrew/bin/soffice", "/usr/local/bin/soffice"]:
+        for p in [
+            "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+            "/opt/homebrew/bin/soffice",
+            "/usr/local/bin/soffice",
+        ]:
             if os.path.exists(p):
                 soffice_path = p
                 break
@@ -357,7 +379,7 @@ window.addEventListener("message", (e) => {{
     else if(action === "first")
         Reveal.slide(0);
     else if(action === "last")
-        Reveal.slide({len(slides)-1});
+        Reveal.slide({len(slides) - 1});
     else if(action === "goto" && e.data.index !== undefined)
         Reveal.slide(e.data.index);
 }});
@@ -380,6 +402,7 @@ Reveal.on("slidechanged", (event) => {{
 
 # ── Route A: Original upload (renders everything at once via PyMuPDF) ──
 
+
 @router.post("/upload")
 async def upload_ppt(session_id: str, file: UploadFile = File(...)):
     """Upload PPTX → returns simple status. Renders all slides synchronously via PyMuPDF."""
@@ -390,6 +413,7 @@ async def upload_ppt(session_id: str, file: UploadFile = File(...)):
 
     def _render():
         from pptx import Presentation
+
         prs = Presentation(io.BytesIO(content))
         slides = []
         for i, slide in enumerate(prs.slides):
@@ -408,6 +432,7 @@ async def upload_ppt(session_id: str, file: UploadFile = File(...)):
 
 # ── Route B: upload_instant (PDF-rendered slide flow with PyMuPDF fallback) ──
 
+
 @router.post("/upload_instant")
 async def upload_instant(session_id: str, file: UploadFile = File(...)):
     """Upload PPTX → returns JSON with all slides including high-fidelity images."""
@@ -417,37 +442,45 @@ async def upload_instant(session_id: str, file: UploadFile = File(...)):
     content = await file.read()
 
     def _render_all() -> list[dict]:
-        from pptx import Presentation
         import fitz
-        
+        from pptx import Presentation
+
         try:
             if hasattr(fitz, "TOOLS"):
                 fitz.TOOLS.mupdf_display_errors(False)
         except Exception:
             pass
-        
+
         prs = Presentation(io.BytesIO(content))
         prs_w = prs.slide_width
         prs_h = prs.slide_height
-        
+
         slides_out = []
         for i, slide in enumerate(prs.slides):
             meta = _extract_slide_meta(slide, i, prs_w, prs_h)
             slides_out.append(meta)
-            
+
         soffice_path = _get_libreoffice_path()
         pdf_rendered = False
-        
+
         if soffice_path:
             try:
                 with tempfile.TemporaryDirectory() as temp_dir:
                     pptx_temp_path = os.path.join(temp_dir, "presentation.pptx")
                     with open(pptx_temp_path, "wb") as f_temp:
                         f_temp.write(content)
-                        
-                    cmd = [soffice_path, "--headless", "--convert-to", "pdf", "--outdir", temp_dir, pptx_temp_path]
+
+                    cmd = [
+                        soffice_path,
+                        "--headless",
+                        "--convert-to",
+                        "pdf",
+                        "--outdir",
+                        temp_dir,
+                        pptx_temp_path,
+                    ]
                     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    
+
                     pdf_path = os.path.join(temp_dir, "presentation.pdf")
                     if os.path.exists(pdf_path):
                         doc = fitz.open(pdf_path)
@@ -461,11 +494,11 @@ async def upload_instant(session_id: str, file: UploadFile = File(...)):
                         logger.info("Successfully rendered all slides to PNG via LibreOffice PDF pipeline.")
             except Exception as lo_err:
                 logger.error(f"LibreOffice instant conversion failed: {lo_err}")
-                
+
         if not pdf_rendered:
             for i, slide in enumerate(prs.slides):
                 slides_out[i]["img_b64"] = _slide_to_png_b64(slide, prs_w, prs_h)
-                
+
         return slides_out
 
     slides = await asyncio.to_thread(_render_all)
@@ -476,6 +509,7 @@ async def upload_instant(session_id: str, file: UploadFile = File(...)):
 
 # ── Route C: upload_stream (streams PNG slides slide-by-slide via SSE) ──
 
+
 @router.post("/upload_stream")
 async def upload_stream(session_id: str, file: UploadFile = File(...)):
     """Upload PPTX → SSE stream. Emits rendered PNG slides slide-by-slide."""
@@ -485,30 +519,40 @@ async def upload_stream(session_id: str, file: UploadFile = File(...)):
     content = await file.read()
 
     async def _event_generator():
-        from pptx import Presentation
         import fitz
+        from pptx import Presentation
 
         prs = Presentation(io.BytesIO(content))
-        prs_w  = prs.slide_width
-        prs_h  = prs.slide_height
-        total  = len(prs.slides)
+        prs_w = prs.slide_width
+        prs_h = prs.slide_height
+        total = len(prs.slides)
         store_list: list[dict] = []
 
         yield f"data: {json.dumps({'type': 'init', 'total': total})}\n\n"
-        
+
         soffice_path = _get_libreoffice_path()
         pdf_doc = None
-        
+
         if soffice_path:
             try:
                 temp_dir = tempfile.mkdtemp()
                 pptx_temp_path = os.path.join(temp_dir, "presentation.pptx")
                 with open(pptx_temp_path, "wb") as f_temp:
                     f_temp.write(content)
-                    
-                cmd = [soffice_path, "--headless", "--convert-to", "pdf", "--outdir", temp_dir, pptx_temp_path]
-                subprocess.run(cmd, check=True, timeout=10.0, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                
+
+                cmd = [
+                    soffice_path,
+                    "--headless",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    temp_dir,
+                    pptx_temp_path,
+                ]
+                subprocess.run(
+                    cmd, check=True, timeout=10.0, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+
                 pdf_path = os.path.join(temp_dir, "presentation.pdf")
                 if os.path.exists(pdf_path):
                     pdf_doc = fitz.open(pdf_path)
@@ -518,7 +562,7 @@ async def upload_stream(session_id: str, file: UploadFile = File(...)):
         for i, slide in enumerate(prs.slides):
             meta = await asyncio.to_thread(_extract_slide_meta, slide, i, prs_w, prs_h)
             img_b64 = ""
-            
+
             if pdf_doc and i < len(pdf_doc):
                 try:
                     page = pdf_doc[i]
@@ -527,14 +571,11 @@ async def upload_stream(session_id: str, file: UploadFile = File(...)):
                     img_b64 = base64.b64encode(png_bytes).decode()
                 except Exception as page_err:
                     logger.error(f"Failed to render slide page {i} from PDF: {page_err}")
-                    
+
             if not img_b64:
                 img_b64 = await asyncio.to_thread(_slide_to_png_b64, slide, prs_w, prs_h)
 
-            store_list.append({
-                **meta,
-                "img_b64": img_b64
-            })
+            store_list.append({**meta, "img_b64": img_b64})
             payload = {**meta, "img_b64": img_b64, "total": total, "type": "slide"}
             yield f"data: {json.dumps(payload)}\n\n"
 
@@ -548,21 +589,22 @@ async def upload_stream(session_id: str, file: UploadFile = File(...)):
         _slide_store[session_id] = store_list
         set_latest_upload_sid(session_id)
         _current_slide[session_id] = 0
-        
+
         yield f"data: {json.dumps({'type': 'done', 'total': total})}\n\n"
 
     return StreamingResponse(
         _event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control":               "no-cache",
-            "X-Accel-Buffering":           "no",
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
             "Access-Control-Allow-Origin": "*",
         },
     )
 
 
 # ── Route D: Prepared stream (upload_prepare + render_stream split) ──
+
 
 @router.post("/upload_prepare")
 async def upload_prepare(session_id: str, file: UploadFile = File(...)):
@@ -582,6 +624,7 @@ async def upload_prepare(session_id: str, file: UploadFile = File(...)):
 async def render_stream(session_id: str, token: str):
     """EventSource endpoint called by the frontend to render the slides page-by-page."""
     from backend.core.security import decode_token
+
     try:
         decode_token(token)
     except Exception:
@@ -592,9 +635,9 @@ async def render_stream(session_id: str, token: str):
         raise HTTPException(404, "Prepared presentation file not found")
 
     async def _event_generator():
-        from pptx import Presentation
         import fitz
-        
+        from pptx import Presentation
+
         try:
             if hasattr(fitz, "TOOLS"):
                 fitz.TOOLS.mupdf_display_errors(False)
@@ -602,22 +645,24 @@ async def render_stream(session_id: str, token: str):
             pass
 
         prs = Presentation(path)
-        prs_w  = prs.slide_width
-        prs_h  = prs.slide_height
-        total  = len(prs.slides)
+        prs_w = prs.slide_width
+        prs_h = prs.slide_height
+        total = len(prs.slides)
         store_list: list[dict] = []
 
         yield f"data: {json.dumps({'type': 'init', 'total': total})}\n\n"
-        
+
         soffice_path = _get_libreoffice_path()
         pdf_doc = None
-        
+
         if soffice_path:
             try:
                 temp_dir = tempfile.mkdtemp()
                 cmd = [soffice_path, "--headless", "--convert-to", "pdf", "--outdir", temp_dir, path]
-                subprocess.run(cmd, check=True, timeout=15.0, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                
+                subprocess.run(
+                    cmd, check=True, timeout=15.0, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+
                 pdf_filename = os.path.splitext(os.path.basename(path))[0] + ".pdf"
                 pdf_path = os.path.join(temp_dir, pdf_filename)
                 if os.path.exists(pdf_path):
@@ -628,7 +673,7 @@ async def render_stream(session_id: str, token: str):
         for i, slide in enumerate(prs.slides):
             meta = await asyncio.to_thread(_extract_slide_meta, slide, i, prs_w, prs_h)
             img_b64 = ""
-            
+
             if pdf_doc and i < len(pdf_doc):
                 try:
                     page = pdf_doc[i]
@@ -637,14 +682,11 @@ async def render_stream(session_id: str, token: str):
                     img_b64 = base64.b64encode(png_bytes).decode()
                 except Exception as page_err:
                     logger.error(f"Failed to render slide page {i} from PDF: {page_err}")
-                    
+
             if not img_b64:
                 img_b64 = await asyncio.to_thread(_slide_to_png_b64, slide, prs_w, prs_h)
 
-            store_list.append({
-                **meta,
-                "img_b64": img_b64
-            })
+            store_list.append({**meta, "img_b64": img_b64})
             payload = {**meta, "img_b64": img_b64, "total": total, "type": "slide"}
             yield f"data: {json.dumps(payload)}\n\n"
 
@@ -658,21 +700,22 @@ async def render_stream(session_id: str, token: str):
         _slide_store[session_id] = store_list
         set_latest_upload_sid(session_id)
         _current_slide[session_id] = 0
-        
+
         yield f"data: {json.dumps({'type': 'done', 'total': total})}\n\n"
 
     return StreamingResponse(
         _event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control":               "no-cache",
-            "X-Accel-Buffering":           "no",
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
             "Access-Control-Allow-Origin": "*",
         },
     )
 
 
 # ── Route E: Viewer & Slide Control ──
+
 
 @router.get("/viewer/{session_id}", response_class=HTMLResponse)
 async def get_viewer(session_id: str):
@@ -687,6 +730,7 @@ async def get_viewer(session_id: str):
 async def navigate(cmd: PPTCmd):
     """Executes a slide navigation action (next, prev, first, last) on the active session."""
     from backend.tools.ppt_copilot import ppt_navigate
+
     return await ppt_navigate({"direction": cmd.direction}, cmd.session_id)
 
 
@@ -694,6 +738,7 @@ async def navigate(cmd: PPTCmd):
 async def jump(cmd: JumpCmd):
     """Analyzes natural language queries and navigates to matching slide index numbers."""
     from backend.queues.bus import bus
+
     slides = _slide_store.get(cmd.session_id, [])
     q = cmd.query.lower()
     m = re.search(r"\b(\d+)\b", q)
@@ -706,14 +751,13 @@ async def jump(cmd: JumpCmd):
 
 # ── Route F: Slide Summary & Q&A ──
 
+
 @router.post("/summarise")
 async def summarise(data: dict):
     """Compiles the first 20 slide titles to provide a fast contextual synopsis of the slide deck."""
     slides = _slide_store.get(data.get("session_id", ""), [])
     titles = ", ".join(slide["title"] for slide in slides[:20])
-    return {
-        "reply": f"Presentation contains {len(slides)} slides. Topics: {titles}"
-    }
+    return {"reply": f"Presentation contains {len(slides)} slides. Topics: {titles}"}
 
 
 @router.get("/slides/{session_id}")
@@ -727,27 +771,29 @@ async def get_slides(session_id: str):
 async def qa(data: dict):
     """Asks questions about the slide deck, invoking the local PDF/text shape parser."""
     from backend.tools.ppt_copilot import ppt_qa
+
     return await ppt_qa({"query": data.get("query", "")}, data.get("session_id", ""))
 
 
 async def download_ai_image(prompt_str: str) -> str | None:
     """Helper to generate and download a professional AI image via Pollinations AI with rate-limit retries and fallbacks."""
-    import urllib.parse
-    import httpx
     import asyncio
     import random
-    
+    import urllib.parse
+
+    import httpx
+
     try:
         os.makedirs("data/ppt/images", exist_ok=True)
         filename = f"ai_gen_{int(time.time())}_{hash(prompt_str) % 10000}.png"
         save_path = os.path.join("data/ppt/images", filename)
-        
+
         encoded_prompt = urllib.parse.quote(prompt_str)
         urls = [
             f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=800&height=600&model=flux&nologo=true",
-            f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=800&height=600&nologo=true"
+            f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=800&height=600&nologo=true",
         ]
-        
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             for attempt in range(4):
                 url = urls[0] if attempt < 2 else urls[1]
@@ -755,23 +801,29 @@ async def download_ai_image(prompt_str: str) -> str | None:
                     # Apply sleep with jitter to stagger parallel downloads
                     sleep_time = (attempt * 1.5) + random.uniform(0.5, 1.5)
                     await asyncio.sleep(sleep_time)
-                    
+
                     resp = await client.get(url)
                     if resp.status_code == 200:
                         with open(save_path, "wb") as f:
                             f.write(resp.content)
-                        logger.info(f"Downloaded generated AI image to: {save_path} on attempt {attempt+1}")
+                        logger.info(f"Downloaded generated AI image to: {save_path} on attempt {attempt + 1}")
                         return save_path
                     elif resp.status_code == 429:
-                        logger.warning(f"Pollinations AI rate limited (429) for prompt: '{prompt_str}'. Retrying...")
+                        logger.warning(
+                            f"Pollinations AI rate limited (429) for prompt: '{prompt_str}'. Retrying..."
+                        )
                     else:
-                        logger.warning(f"Pollinations AI returned status {resp.status_code} for prompt: '{prompt_str}'")
+                        logger.warning(
+                            f"Pollinations AI returned status {resp.status_code} for prompt: '{prompt_str}'"
+                        )
                 except Exception as attempt_err:
-                    logger.error(f"Image download attempt {attempt+1} failed: {attempt_err}")
-                    
+                    logger.error(f"Image download attempt {attempt + 1} failed: {attempt_err}")
+
         # Ultimate fallback: high-quality neutral professional placeholder image
         try:
-            fallback_url = "https://images.unsplash.com/photo-1557804506-669a67965ba0?auto=format&fit=crop&w=800&q=80"
+            fallback_url = (
+                "https://images.unsplash.com/photo-1557804506-669a67965ba0?auto=format&fit=crop&w=800&q=80"
+            )
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(fallback_url)
                 if resp.status_code == 200:
@@ -781,7 +833,7 @@ async def download_ai_image(prompt_str: str) -> str | None:
                     return save_path
         except Exception as fb_err:
             logger.error(f"Ultimate fallback image download failed: {fb_err}")
-            
+
     except Exception as e:
         logger.error(f"Failed to generate and download AI image: {e}")
     return None
@@ -790,6 +842,7 @@ async def download_ai_image(prompt_str: str) -> str | None:
 def clear_ppt_directory():
     """Removes all files in data/ppt and data/ppt/images to start fresh."""
     import shutil
+
     try:
         ppt_dir = "data/ppt"
         if os.path.exists(ppt_dir):
@@ -811,8 +864,9 @@ def clear_ppt_directory():
 async def create_presentation_from_prompt(prompt: str, session_id: str, slide_count: int = 5) -> list[dict]:
     """Generates slide outline using Ollama, creates a PPTX presentation, and renders the slides."""
     clear_ppt_directory()
-    
+
     import httpx
+
     from backend.core.config import settings
 
     system_content = (
@@ -820,12 +874,12 @@ async def create_presentation_from_prompt(prompt: str, session_id: str, slide_co
         "You MUST respond ONLY with a valid JSON object. Do not write any markdown, "
         "explanations, or backticks outside the JSON. The JSON must follow this exact schema:\n"
         "{\n"
-        "  \"slides\": [\n"
+        '  "slides": [\n'
         "    {\n"
-        "      \"title\": \"Slide Title\",\n"
-        "      \"bullets\": [\"Key bullet point 1\", \"Key bullet point 2\"],\n"
-        "      \"notes\": \"Detailed speaker notes for the presenter\",\n"
-        "      \"image_prompt\": \"Detailed description of a professional graphic, chart, 3D object, or diagram that visually represents this slide's content, or 'None' if an image is not suitable\"\n"
+        '      "title": "Slide Title",\n'
+        '      "bullets": ["Key bullet point 1", "Key bullet point 2"],\n'
+        '      "notes": "Detailed speaker notes for the presenter",\n'
+        '      "image_prompt": "Detailed description of a professional graphic, chart, 3D object, or diagram that visually represents this slide\'s content, or \'None\' if an image is not suitable"\n'
         "    }\n"
         "  ]\n"
         "}\n"
@@ -841,44 +895,41 @@ async def create_presentation_from_prompt(prompt: str, session_id: str, slide_co
             {"role": "system", "content": system_content},
             {"role": "user", "content": f"Create a presentation on the topic: {prompt}"},
         ],
-        "options": {
-            "temperature": 0.3,
-            "num_predict": 1500
-        },
-        "format": "json"
+        "options": {"temperature": 0.3, "num_predict": 1500},
+        "format": "json",
     }
 
     slides_data = []
     parsed = None
-    
+
     # 1. Try Gemini (Highly detailed, content-rich)
     if settings.GEMINI_API_KEY:
         try:
             logger.info("Generating content-rich slides using cloud Gemini API...")
             import google.generativeai as genai
+
             genai.configure(api_key=settings.GEMINI_API_KEY)
             model = genai.GenerativeModel("gemini-2.5-flash")
-            
+
             prompt_content = (
                 f"Create a highly detailed, professional presentation outline on the topic: '{prompt}'.\n"
                 f"You MUST generate exactly {slide_count} slides.\n"
                 "Ensure the slide content is extremely comprehensive, informative, and detailed (not just simple one-word bullet points).\n"
                 "Respond ONLY with a valid JSON object matching this schema:\n"
                 "{\n"
-                "  \"slides\": [\n"
+                '  "slides": [\n'
                 "    {\n"
-                "      \"title\": \"Slide Title\",\n"
-                "      \"bullets\": [\"Detailed, informative bullet point 1\", \"Detailed, informative bullet point 2\"],\n"
-                "      \"notes\": \"Comprehensive speaker notes detailing the slide concepts\",\n"
-                "      \"image_prompt\": \"Detailed description of a professional graphic, chart, 3D object, or diagram that visually represents this slide's content, or 'None' if an image is not suitable\"\n"
+                '      "title": "Slide Title",\n'
+                '      "bullets": ["Detailed, informative bullet point 1", "Detailed, informative bullet point 2"],\n'
+                '      "notes": "Comprehensive speaker notes detailing the slide concepts",\n'
+                '      "image_prompt": "Detailed description of a professional graphic, chart, 3D object, or diagram that visually represents this slide\'s content, or \'None\' if an image is not suitable"\n'
                 "    }\n"
                 "  ]\n"
                 "}"
             )
-            
+
             response = await model.generate_content_async(
-                prompt_content,
-                generation_config={"response_mime_type": "application/json"}
+                prompt_content, generation_config={"response_mime_type": "application/json"}
             )
             parsed = json.loads(response.text.strip())
         except Exception as gem_err:
@@ -889,32 +940,36 @@ async def create_presentation_from_prompt(prompt: str, session_id: str, slide_co
         try:
             logger.info("Generating content-rich slides using cloud Groq API...")
             from groq import AsyncGroq
+
             client = AsyncGroq(api_key=settings.GROQ_API_KEY)
-            
+
             prompt_content = (
                 f"Create a highly detailed, professional presentation outline on the topic: '{prompt}'.\n"
                 f"You MUST generate exactly {slide_count} slides.\n"
                 "Ensure the slide content is extremely comprehensive, informative, and detailed.\n"
                 "Respond ONLY with a valid JSON object matching this schema:\n"
                 "{\n"
-                "  \"slides\": [\n"
+                '  "slides": [\n'
                 "    {\n"
-                "      \"title\": \"Slide Title\",\n"
-                "      \"bullets\": [\"Detailed, informative bullet point 1\", \"Detailed, informative bullet point 2\"],\n"
-                "      \"notes\": \"Comprehensive speaker notes detailing the slide concepts\",\n"
-                "      \"image_prompt\": \"Detailed description of a professional graphic, chart, 3D object, or diagram that visually represents this slide's content, or 'None' if an image is not suitable\"\n"
+                '      "title": "Slide Title",\n'
+                '      "bullets": ["Detailed, informative bullet point 1", "Detailed, informative bullet point 2"],\n'
+                '      "notes": "Comprehensive speaker notes detailing the slide concepts",\n'
+                '      "image_prompt": "Detailed description of a professional graphic, chart, 3D object, or diagram that visually represents this slide\'s content, or \'None\' if an image is not suitable"\n'
                 "    }\n"
                 "  ]\n"
                 "}"
             )
-            
+
             resp = await client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[
-                    {"role": "system", "content": "You are an expert presentation designer. Respond only in JSON format matching the requested schema."},
-                    {"role": "user", "content": prompt_content}
+                    {
+                        "role": "system",
+                        "content": "You are an expert presentation designer. Respond only in JSON format matching the requested schema.",
+                    },
+                    {"role": "user", "content": prompt_content},
                 ],
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
             parsed = json.loads(resp.choices[0].message.content)
         except Exception as groq_err:
@@ -929,7 +984,7 @@ async def create_presentation_from_prompt(prompt: str, session_id: str, slide_co
                 if resp.status_code == 200:
                     result_data = resp.json()
                     raw_content = result_data.get("message", {}).get("content", "").strip()
-                    
+
                     # Parse JSON
                     try:
                         parsed = json.loads(raw_content)
@@ -946,7 +1001,7 @@ async def create_presentation_from_prompt(prompt: str, session_id: str, slide_co
     try:
         if not parsed:
             raise ValueError("No slide data was successfully generated by any LLM provider.")
-            
+
         # Robustly extract the list of slides
         extracted_list = []
         if isinstance(parsed, dict):
@@ -970,42 +1025,43 @@ async def create_presentation_from_prompt(prompt: str, session_id: str, slide_co
                 elif not isinstance(bullets, list):
                     bullets = []
                 bullets = [str(b) for b in bullets]
-                
+
                 # Retrieve the optional generated image prompt and download the AI asset
                 image_prompt = item.get("image_prompt", "").strip()
                 title_str = str(item.get("title", "Untitled Slide"))
-                
+
                 # Enforce visual asset generation for all content slides (slides after the title slide)
                 if i > 0:
                     if not image_prompt or image_prompt.lower() in ("none", "null", ""):
-                        image_prompt = f"A clean, professional modern corporate graphic representation of: {title_str}"
-                
+                        image_prompt = (
+                            f"A clean, professional modern corporate graphic representation of: {title_str}"
+                        )
+
                 slide_images = []
                 if image_prompt and image_prompt.lower() not in ("none", "null", ""):
                     img_path = await download_ai_image(image_prompt)
                     if img_path:
-                        slide_images.append({
-                            "path": img_path,
-                            "left_in": 7.5,
-                            "top_in": 1.8,
-                            "width_in": 5.0,
-                            "height_in": 4.5
-                        })
-                
-                normalized_slides.append({
-                    "title": title_str,
-                    "bullets": bullets,
-                    "notes": str(item.get("notes", "")),
-                    "images": slide_images
-                })
+                        slide_images.append(
+                            {
+                                "path": img_path,
+                                "left_in": 7.5,
+                                "top_in": 1.8,
+                                "width_in": 5.0,
+                                "height_in": 4.5,
+                            }
+                        )
+
+                normalized_slides.append(
+                    {
+                        "title": title_str,
+                        "bullets": bullets,
+                        "notes": str(item.get("notes", "")),
+                        "images": slide_images,
+                    }
+                )
             elif isinstance(item, str):
-                normalized_slides.append({
-                    "title": item,
-                    "bullets": [],
-                    "notes": "",
-                    "images": []
-                })
-        
+                normalized_slides.append({"title": item, "bullets": [], "notes": "", "images": []})
+
         if normalized_slides:
             slides_data = normalized_slides
         else:
@@ -1016,29 +1072,49 @@ async def create_presentation_from_prompt(prompt: str, session_id: str, slide_co
         slides_data = [
             {
                 "title": f"Introduction to {prompt}",
-                "bullets": [f"Overview of {prompt}", "Key concepts and foundations", "Historical background and context"],
-                "notes": "Welcome everyone. Today we are exploring this topic."
+                "bullets": [
+                    f"Overview of {prompt}",
+                    "Key concepts and foundations",
+                    "Historical background and context",
+                ],
+                "notes": "Welcome everyone. Today we are exploring this topic.",
             },
             {
                 "title": "Core Principles",
-                "bullets": ["Fundamental mechanism of action", "Key structures and components", "Important rules and guidelines"],
-                "notes": "Let's dive into the core mechanisms that make this work."
+                "bullets": [
+                    "Fundamental mechanism of action",
+                    "Key structures and components",
+                    "Important rules and guidelines",
+                ],
+                "notes": "Let's dive into the core mechanisms that make this work.",
             },
             {
                 "title": "Main Benefits & Applications",
-                "bullets": ["Real-world use cases", "Efficiency and cost improvements", "Impact on modern industry"],
-                "notes": "Here are the primary ways this technology is applied in the real world."
+                "bullets": [
+                    "Real-world use cases",
+                    "Efficiency and cost improvements",
+                    "Impact on modern industry",
+                ],
+                "notes": "Here are the primary ways this technology is applied in the real world.",
             },
             {
                 "title": "Challenges & Solutions",
-                "bullets": ["Current limitations and hurdles", "Innovative workarounds and research", "Future outlook and developments"],
-                "notes": "Of course, there are some challenges we must address."
+                "bullets": [
+                    "Current limitations and hurdles",
+                    "Innovative workarounds and research",
+                    "Future outlook and developments",
+                ],
+                "notes": "Of course, there are some challenges we must address.",
             },
             {
                 "title": "Conclusion & Q&A",
-                "bullets": ["Summary of key takeaways", "Future roadmap and expansion", "Thank you for your time"],
-                "notes": "Thank you. I am happy to open the floor for any questions."
-            }
+                "bullets": [
+                    "Summary of key takeaways",
+                    "Future roadmap and expansion",
+                    "Thank you for your time",
+                ],
+                "notes": "Thank you. I am happy to open the floor for any questions.",
+            },
         ]
         slides_data = slides_data[:slide_count]
 
@@ -1051,9 +1127,9 @@ async def create_presentation_from_prompt(prompt: str, session_id: str, slide_co
 def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = "Presentation") -> list[dict]:
     """Compiles list of slide dictionaries to PPTX presentation and renders each slide to base64 PNG."""
     from pptx import Presentation
-    from pptx.util import Inches, Pt
     from pptx.dml.color import RGBColor
     from pptx.enum.text import PP_ALIGN
+    from pptx.util import Inches, Pt
 
     prs = Presentation()
     prs.slide_width = Inches(13.333)
@@ -1065,11 +1141,14 @@ def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = 
 
         # Widescreen left accent bar: left 0, top 0, width 0.12 inches, height 7.5 inches (Grid Dynamics Accent Bar)
         accent_bar = slide.shapes.add_shape(
-            1, # MSO_SHAPE.RECTANGLE = 1
-            Inches(0), Inches(0), Inches(0.12), Inches(7.5)
+            1,  # MSO_SHAPE.RECTANGLE = 1
+            Inches(0),
+            Inches(0),
+            Inches(0.12),
+            Inches(7.5),
         )
         accent_bar.fill.solid()
-        accent_bar.fill.fore_color.rgb = RGBColor(245, 167, 0) # Amber Gold (#F5A700)
+        accent_bar.fill.fore_color.rgb = RGBColor(245, 167, 0)  # Amber Gold (#F5A700)
         accent_bar.line.fill.background()
 
         # Background solid color: White (#FFFFFF)
@@ -1105,7 +1184,7 @@ def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = 
             p.font.name = "Arial"
             p.font.size = Pt(48)
             p.font.bold = True
-            p.font.color.rgb = RGBColor(17, 17, 18) # Dark Charcoal
+            p.font.color.rgb = RGBColor(17, 17, 18)  # Dark Charcoal
 
             # Subtitle (Darker Amber Gold for contrast)
             p2 = tf.add_paragraph()
@@ -1113,7 +1192,7 @@ def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = 
             p2.alignment = PP_ALIGN.CENTER
             p2.font.name = "Arial"
             p2.font.size = Pt(22)
-            p2.font.color.rgb = RGBColor(212, 144, 15) # Dark Amber Gold
+            p2.font.color.rgb = RGBColor(212, 144, 15)  # Dark Amber Gold
             p2.space_before = Pt(20)
 
             # Extra details (Medium Gray)
@@ -1123,7 +1202,7 @@ def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = 
                 p3.alignment = PP_ALIGN.CENTER
                 p3.font.name = "Arial"
                 p3.font.size = Pt(14)
-                p3.font.color.rgb = RGBColor(110, 110, 115) # Medium Gray
+                p3.font.color.rgb = RGBColor(110, 110, 115)  # Medium Gray
                 p3.space_before = Pt(14)
         else:
             # Content slide layout
@@ -1136,15 +1215,18 @@ def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = 
             p_title.font.name = "Arial"
             p_title.font.size = Pt(32)
             p_title.font.bold = True
-            p_title.font.color.rgb = RGBColor(212, 144, 15) # Dark Amber Gold
+            p_title.font.color.rgb = RGBColor(212, 144, 15)  # Dark Amber Gold
 
             # Divider line decorative element (Amber Gold)
             divider = slide.shapes.add_shape(
-                1, # MSO_SHAPE.RECTANGLE = 1
-                Inches(0.8), Inches(1.4), Inches(11.733), Inches(0.02)
+                1,  # MSO_SHAPE.RECTANGLE = 1
+                Inches(0.8),
+                Inches(1.4),
+                Inches(11.733),
+                Inches(0.02),
             )
             divider.fill.solid()
-            divider.fill.fore_color.rgb = RGBColor(245, 167, 0) # Amber Gold (#F5A700)
+            divider.fill.fore_color.rgb = RGBColor(245, 167, 0)  # Amber Gold (#F5A700)
             divider.line.fill.background()
 
             # Bullet points — narrow width if slide contains an image
@@ -1177,7 +1259,7 @@ def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = 
                 p_bullet.text = f"•  {b}"
                 p_bullet.font.name = "Arial"
                 p_bullet.font.size = font_size
-                p_bullet.font.color.rgb = RGBColor(40, 40, 42) # Dark Charcoal
+                p_bullet.font.color.rgb = RGBColor(40, 40, 42)  # Dark Charcoal
                 p_bullet.space_after = space_after
 
             # Insert images on the right side if present
@@ -1195,18 +1277,15 @@ def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = 
                                 Inches(left_val),
                                 Inches(top_val),
                                 width=Inches(w_val),
-                                height=Inches(h_val)
+                                height=Inches(h_val),
                             )
                         except Exception as img_err:
                             logger.error(f"Failed to add picture {img_path} to slide {idx + 1}: {img_err}")
 
             # Subtle footer divider
-            footer_line = slide.shapes.add_shape(
-                1,
-                Inches(0.8), Inches(6.7), Inches(11.733), Inches(0.015)
-            )
+            footer_line = slide.shapes.add_shape(1, Inches(0.8), Inches(6.7), Inches(11.733), Inches(0.015))
             footer_line.fill.solid()
-            footer_line.fill.fore_color.rgb = RGBColor(220, 220, 225) # Light Gray
+            footer_line.fill.fore_color.rgb = RGBColor(220, 220, 225)  # Light Gray
             footer_line.line.fill.background()
 
             # Slide number + branded footer (Grid Dynamics)
@@ -1216,7 +1295,7 @@ def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = 
             p_foot.alignment = PP_ALIGN.RIGHT
             p_foot.font.name = "Arial"
             p_foot.font.size = Pt(9)
-            p_foot.font.color.rgb = RGBColor(110, 110, 115) # Medium Gray
+            p_foot.font.color.rgb = RGBColor(110, 110, 115)  # Medium Gray
 
             # Topic on bottom left
             topic_box = slide.shapes.add_textbox(Inches(0.8), Inches(6.8), Inches(6.0), Inches(0.5))
@@ -1224,7 +1303,7 @@ def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = 
             p_topic.text = f"Topic: {topic.title()}"
             p_topic.font.name = "Arial"
             p_topic.font.size = Pt(9)
-            p_topic.font.color.rgb = RGBColor(142, 142, 147) # Warm Gray
+            p_topic.font.color.rgb = RGBColor(142, 142, 147)  # Warm Gray
 
         # Set speaker notes
         if notes:
@@ -1241,6 +1320,7 @@ def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = 
 
     # Render the presentation to PNGs
     import fitz
+
     try:
         if hasattr(fitz, "TOOLS"):
             fitz.TOOLS.mupdf_display_errors(False)
@@ -1253,13 +1333,15 @@ def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = 
 
     soffice_path = _get_libreoffice_path()
     pdf_doc = None
-    
+
     if soffice_path:
         try:
             temp_dir = tempfile.mkdtemp()
             cmd = [soffice_path, "--headless", "--convert-to", "pdf", "--outdir", temp_dir, pptx_path]
-            subprocess.run(cmd, check=True, timeout=15.0, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
+            subprocess.run(
+                cmd, check=True, timeout=15.0, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+
             pdf_filename = f"{session_id}.pdf"
             pdf_path = os.path.join(temp_dir, pdf_filename)
             if os.path.exists(pdf_path):
@@ -1270,7 +1352,7 @@ def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = 
     for i, slide in enumerate(prs.slides):
         meta = _extract_slide_meta(slide, i, prs_w, prs_h)
         img_b64 = ""
-        
+
         if pdf_doc and i < len(pdf_doc):
             try:
                 page = pdf_doc[i]
@@ -1279,17 +1361,13 @@ def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = 
                 img_b64 = base64.b64encode(png_bytes).decode()
             except Exception as page_err:
                 logger.error(f"Failed to render generated slide page {i} from PDF: {page_err}")
-                
+
         if not img_b64:
             img_b64 = _slide_to_png_b64(slide, prs_w, prs_h)
 
         # Preserve the images data structure in memory store
         slide_images = slides_data[i].get("images", []) if i < len(slides_data) else []
-        store_list.append({
-            **meta,
-            "img_b64": img_b64,
-            "images": slide_images
-        })
+        store_list.append({**meta, "img_b64": img_b64, "images": slide_images})
 
     if pdf_doc:
         pdf_doc.close()
@@ -1306,6 +1384,7 @@ def save_and_render_pptx(slides_data: list[dict], session_id: str, topic: str = 
 async def improvise_slide_content(current_slide: dict, user_prompt: str) -> dict:
     """Invokes LLM (Gemini -> Groq -> local Ollama cascade) to rewrite the content of a single slide."""
     import httpx
+
     from backend.core.config import settings
 
     system_content = (
@@ -1316,9 +1395,9 @@ async def improvise_slide_content(current_slide: dict, user_prompt: str) -> dict
         "Instead, rewrite using clear and highly readable language, but maintain a high density of information and a good amount of content—each bullet point must remain a fully developed, detailed sentence or two explaining a complete concept. Never output short phrases or single-word bullets.\n"
         "You MUST respond ONLY with a valid JSON object matching this exact schema:\n"
         "{\n"
-        "  \"title\": \"Improved Slide Title\",\n"
-        "  \"bullets\": [\"Highly detailed, informative, and comprehensive bullet point 1\", \"Highly detailed, informative, and comprehensive bullet point 2\"],\n"
-        "  \"notes\": \"Comprehensive and detailed speaker notes fully detailing the concepts shown on the slide\"\n"
+        '  "title": "Improved Slide Title",\n'
+        '  "bullets": ["Highly detailed, informative, and comprehensive bullet point 1", "Highly detailed, informative, and comprehensive bullet point 2"],\n'
+        '  "notes": "Comprehensive and detailed speaker notes fully detailing the concepts shown on the slide"\n'
         "}\n"
         "Do not write any markdown, explanations, or backticks outside the JSON.\n"
         "Generate 3-5 comprehensive and rich bullet points that fully cover the subject matter."
@@ -1343,11 +1422,15 @@ async def improvise_slide_content(current_slide: dict, user_prompt: str) -> dict
     if settings.GEMINI_API_KEY:
         try:
             import google.generativeai as genai
+
             genai.configure(api_key=settings.GEMINI_API_KEY)
             model = genai.GenerativeModel("gemini-2.5-flash")
             response = await model.generate_content_async(
                 user_content,
-                generation_config={"response_mime_type": "application/json", "system_instruction": system_content}
+                generation_config={
+                    "response_mime_type": "application/json",
+                    "system_instruction": system_content,
+                },
             )
             parsed = json.loads(response.text.strip())
         except Exception as e:
@@ -1357,14 +1440,15 @@ async def improvise_slide_content(current_slide: dict, user_prompt: str) -> dict
     if not parsed and settings.GROQ_API_KEY:
         try:
             from groq import AsyncGroq
+
             client = AsyncGroq(api_key=settings.GROQ_API_KEY)
             resp = await client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[
                     {"role": "system", "content": system_content},
-                    {"role": "user", "content": user_content}
+                    {"role": "user", "content": user_content},
                 ],
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
             parsed = json.loads(resp.choices[0].message.content)
         except Exception as e:
@@ -1382,7 +1466,7 @@ async def improvise_slide_content(current_slide: dict, user_prompt: str) -> dict
                     {"role": "user", "content": user_content},
                 ],
                 "options": {"temperature": 0.3, "num_predict": 1500},
-                "format": "json"
+                "format": "json",
             }
             async with httpx.AsyncClient(timeout=40.0) as client:
                 resp = await client.post(url, json=payload)
@@ -1408,14 +1492,14 @@ async def improvise_slide_content(current_slide: dict, user_prompt: str) -> dict
         return {
             "title": str(parsed.get("title", current_slide.get("title", "Untitled"))),
             "bullets": [str(b) for b in bullets],
-            "notes": str(parsed.get("notes", current_slide.get("notes", "")))
+            "notes": str(parsed.get("notes", current_slide.get("notes", ""))),
         }
-    
+
     # Unmodified fallback
     return {
         "title": current_slide.get("title", "Untitled"),
         "bullets": current_slide.get("bullets", []),
-        "notes": current_slide.get("notes", "")
+        "notes": current_slide.get("notes", ""),
     }
 
 
@@ -1455,48 +1539,49 @@ class ImproviseSlideCmd(BaseModel):
 async def add_slide(cmd: AddSlideCmd):
     """Appends a slide manually or programmatically, saves & renders, and emits reload."""
     from backend.queues.bus import bus
-    
+
     session_id = resolve_sid(cmd.session_id)
     slides = list(_slide_store.get(session_id, []))
-    
+
     new_slide = {
         "title": cmd.title or "New Slide",
         "bullets": cmd.bullets or ["Write content or use voice to edit this slide"],
         "notes": cmd.notes or "",
-        "images": []
+        "images": [],
     }
-    
+
     # Re-build plain slide data preserving images
     slides_to_save = []
     for s in slides:
-        slides_to_save.append({
-            "title": s.get("title", ""),
-            "bullets": s.get("bullets", []),
-            "notes": s.get("notes", ""),
-            "images": s.get("images", [])
-        })
+        slides_to_save.append(
+            {
+                "title": s.get("title", ""),
+                "bullets": s.get("bullets", []),
+                "notes": s.get("notes", ""),
+                "images": s.get("images", []),
+            }
+        )
     slides_to_save.append(new_slide)
-    
+
     try:
         rendered = save_and_render_pptx(slides_to_save, session_id, topic="Presentation")
         new_idx = len(rendered) - 1
         _current_slide[session_id] = new_idx
-        
+
         # Emit a reload event and navigate to the new slide
-        await bus.emit_event("ppt_command", {
-            "action": "reload",
-            "slides": rendered,
-            "filename": f"Presentation ({len(rendered)} slides)",
-            "index": new_idx,
-            "preserveCurrent": False
-        }, session_id)
-        
-        return {
-            "status": "ok",
-            "slide_count": len(rendered),
-            "slides": rendered,
-            "index": new_idx
-        }
+        await bus.emit_event(
+            "ppt_command",
+            {
+                "action": "reload",
+                "slides": rendered,
+                "filename": f"Presentation ({len(rendered)} slides)",
+                "index": new_idx,
+                "preserveCurrent": False,
+            },
+            session_id,
+        )
+
+        return {"status": "ok", "slide_count": len(rendered), "slides": rendered, "index": new_idx}
     except Exception as e:
         logger.error(f"Error adding slide: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1506,48 +1591,51 @@ async def add_slide(cmd: AddSlideCmd):
 async def delete_slide(cmd: DeleteSlideCmd):
     """Deletes a slide by index, saves & renders, and emits reload."""
     from backend.queues.bus import bus
-    
+
     session_id = resolve_sid(cmd.session_id)
     slides = list(_slide_store.get(session_id, []))
     if not slides:
         raise HTTPException(status_code=400, detail="No active presentation to delete slide from.")
-        
+
     if cmd.slide_index < 0 or cmd.slide_index >= len(slides):
-        raise HTTPException(status_code=400, detail=f"Slide index {cmd.slide_index} out of range (0-{len(slides)-1})")
-        
+        raise HTTPException(
+            status_code=400, detail=f"Slide index {cmd.slide_index} out of range (0-{len(slides) - 1})"
+        )
+
     # Remove slide
     slides.pop(cmd.slide_index)
-    
+
     # Re-build slide list preserving images
     slides_to_save = []
     for s in slides:
-        slides_to_save.append({
-            "title": s.get("title", ""),
-            "bullets": s.get("bullets", []),
-            "notes": s.get("notes", ""),
-            "images": s.get("images", [])
-        })
-        
+        slides_to_save.append(
+            {
+                "title": s.get("title", ""),
+                "bullets": s.get("bullets", []),
+                "notes": s.get("notes", ""),
+                "images": s.get("images", []),
+            }
+        )
+
     try:
         rendered = save_and_render_pptx(slides_to_save, session_id, topic="Presentation")
         new_idx = min(cmd.slide_index, max(len(rendered) - 1, 0))
         _current_slide[session_id] = new_idx
-        
+
         # Emit a reload event to update the frontend state in real-time
-        await bus.emit_event("ppt_command", {
-            "action": "reload",
-            "slides": rendered,
-            "filename": f"Presentation ({len(rendered)} slides)",
-            "index": new_idx,
-            "preserveCurrent": False
-        }, session_id)
-        
-        return {
-            "status": "ok",
-            "slide_count": len(rendered),
-            "slides": rendered,
-            "index": new_idx
-        }
+        await bus.emit_event(
+            "ppt_command",
+            {
+                "action": "reload",
+                "slides": rendered,
+                "filename": f"Presentation ({len(rendered)} slides)",
+                "index": new_idx,
+                "preserveCurrent": False,
+            },
+            session_id,
+        )
+
+        return {"status": "ok", "slide_count": len(rendered), "slides": rendered, "index": new_idx}
     except Exception as e:
         logger.error(f"Error deleting slide: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1557,16 +1645,16 @@ async def delete_slide(cmd: DeleteSlideCmd):
 async def edit_slide(cmd: EditSlideCmd):
     """Edits a slide by index, saves & renders, and emits reload preserving current index."""
     from backend.queues.bus import bus
-    
+
     session_id = resolve_sid(cmd.session_id)
     slides = list(_slide_store.get(session_id, []))
     if not slides:
         raise HTTPException(status_code=400, detail="No active presentation to edit.")
-        
+
     idx = cmd.slide_index
     if idx < 0 or idx >= len(slides):
-        raise HTTPException(status_code=400, detail=f"Slide index {idx} out of range (0-{len(slides)-1})")
-        
+        raise HTTPException(status_code=400, detail=f"Slide index {idx} out of range (0-{len(slides) - 1})")
+
     # Apply modifications
     if cmd.title is not None:
         slides[idx]["title"] = cmd.title
@@ -1580,36 +1668,37 @@ async def edit_slide(cmd: EditSlideCmd):
         slides[idx]["notes"] = cmd.notes
     if cmd.images is not None:
         slides[idx]["images"] = cmd.images
-        
+
     # Re-build plain slide data preserving images
     slides_to_save = []
     for s in slides:
-        slides_to_save.append({
-            "title": s.get("title", ""),
-            "bullets": s.get("bullets", []),
-            "notes": s.get("notes", ""),
-            "images": s.get("images", [])
-        })
-        
+        slides_to_save.append(
+            {
+                "title": s.get("title", ""),
+                "bullets": s.get("bullets", []),
+                "notes": s.get("notes", ""),
+                "images": s.get("images", []),
+            }
+        )
+
     try:
         rendered = save_and_render_pptx(slides_to_save, session_id, topic="Presentation")
         _current_slide[session_id] = idx
-        
+
         # Emit a reload event preserving current slide view
-        await bus.emit_event("ppt_command", {
-            "action": "reload",
-            "slides": rendered,
-            "filename": f"Presentation ({len(rendered)} slides)",
-            "index": idx,
-            "preserveCurrent": True
-        }, session_id)
-        
-        return {
-            "status": "ok",
-            "slide_count": len(rendered),
-            "slides": rendered,
-            "index": idx
-        }
+        await bus.emit_event(
+            "ppt_command",
+            {
+                "action": "reload",
+                "slides": rendered,
+                "filename": f"Presentation ({len(rendered)} slides)",
+                "index": idx,
+                "preserveCurrent": True,
+            },
+            session_id,
+        )
+
+        return {"status": "ok", "slide_count": len(rendered), "slides": rendered, "index": idx}
     except Exception as e:
         logger.error(f"Error editing slide: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1619,33 +1708,34 @@ async def edit_slide(cmd: EditSlideCmd):
 async def clear_presentation_endpoint(cmd: ClearCmd):
     """Clears the presentation and starts with 1 blank title slide."""
     from backend.queues.bus import bus
-    
+
     session_id = cmd.session_id
-    default_slides = [{
-        "title": "New Presentation",
-        "bullets": ["Voice-Driven Interactive Presentation", "Start speaking or clicking to add slides"],
-        "notes": "Welcome to your new interactive presentation deck.",
-        "images": []
-    }]
-    
+    default_slides = [
+        {
+            "title": "New Presentation",
+            "bullets": ["Voice-Driven Interactive Presentation", "Start speaking or clicking to add slides"],
+            "notes": "Welcome to your new interactive presentation deck.",
+            "images": [],
+        }
+    ]
+
     try:
         rendered = save_and_render_pptx(default_slides, session_id, topic="New Presentation")
         _current_slide[session_id] = 0
-        
-        await bus.emit_event("ppt_command", {
-            "action": "reload",
-            "slides": rendered,
-            "filename": "New Presentation",
-            "index": 0,
-            "preserveCurrent": False
-        }, session_id)
-        
-        return {
-            "status": "ok",
-            "slide_count": len(rendered),
-            "slides": rendered,
-            "index": 0
-        }
+
+        await bus.emit_event(
+            "ppt_command",
+            {
+                "action": "reload",
+                "slides": rendered,
+                "filename": "New Presentation",
+                "index": 0,
+                "preserveCurrent": False,
+            },
+            session_id,
+        )
+
+        return {"status": "ok", "slide_count": len(rendered), "slides": rendered, "index": 0}
     except Exception as e:
         logger.error(f"Error clearing presentation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1655,66 +1745,65 @@ async def clear_presentation_endpoint(cmd: ClearCmd):
 async def upload_image(session_id: str, slide_index: int, file: UploadFile = File(...)):
     """Uploads an image for a specific slide, saves it, inserts it into the slide design, and re-renders."""
     from backend.queues.bus import bus
-    
+
     session_id = resolve_sid(session_id)
     slides = list(_slide_store.get(session_id, []))
     if not slides:
         raise HTTPException(status_code=400, detail="No active presentation to add image to.")
-        
+
     if slide_index < 0 or slide_index >= len(slides):
-        raise HTTPException(status_code=400, detail=f"Slide index {slide_index} out of range (0-{len(slides)-1})")
-        
+        raise HTTPException(
+            status_code=400, detail=f"Slide index {slide_index} out of range (0-{len(slides) - 1})"
+        )
+
     # Ensure images directory exists
     img_dir = "data/ppt/images"
     os.makedirs(img_dir, exist_ok=True)
-    
+
     # Save the file with a clean unique name
     ext = os.path.splitext(file.filename)[1] or ".png"
     filename = f"{session_id}_{slide_index}_{int(time.time())}{ext}"
     saved_path = os.path.join(img_dir, filename)
-    
+
     try:
         content = await file.read()
         with open(saved_path, "wb") as f:
             f.write(content)
-            
+
         # Add to slide metadata (clear previous images for a clean layout)
-        slides[slide_index]["images"] = [{
-            "path": saved_path,
-            "left_in": 7.5,
-            "top_in": 1.8,
-            "width_in": 5.0,
-            "height_in": 4.5
-        }]
-        
+        slides[slide_index]["images"] = [
+            {"path": saved_path, "left_in": 7.5, "top_in": 1.8, "width_in": 5.0, "height_in": 4.5}
+        ]
+
         # Re-build plain slide data preserving images
         slides_to_save = []
         for s in slides:
-            slides_to_save.append({
-                "title": s.get("title", ""),
-                "bullets": s.get("bullets", []),
-                "notes": s.get("notes", ""),
-                "images": s.get("images", [])
-            })
-            
+            slides_to_save.append(
+                {
+                    "title": s.get("title", ""),
+                    "bullets": s.get("bullets", []),
+                    "notes": s.get("notes", ""),
+                    "images": s.get("images", []),
+                }
+            )
+
         rendered = save_and_render_pptx(slides_to_save, session_id, topic="Presentation")
         _current_slide[session_id] = slide_index
-        
+
         # Emit a reload event preserving current slide view
-        await bus.emit_event("ppt_command", {
-            "action": "reload",
-            "slides": rendered,
-            "filename": f"Presentation ({len(rendered)} slides)",
-            "index": slide_index,
-            "preserveCurrent": True
-        }, session_id)
-        
-        return {
-            "status": "ok",
-            "slide_count": len(rendered),
-            "slides": rendered,
-            "index": slide_index
-        }
+        await bus.emit_event(
+            "ppt_command",
+            {
+                "action": "reload",
+                "slides": rendered,
+                "filename": f"Presentation ({len(rendered)} slides)",
+                "index": slide_index,
+                "preserveCurrent": True,
+            },
+            session_id,
+        )
+
+        return {"status": "ok", "slide_count": len(rendered), "slides": rendered, "index": slide_index}
     except Exception as e:
         logger.error(f"Error uploading image to slide: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1724,55 +1813,56 @@ async def upload_image(session_id: str, slide_index: int, file: UploadFile = Fil
 async def improvise_slide(cmd: ImproviseSlideCmd):
     """Uses LLM to improvise the content of a single slide based on user instructions, then saves and renders."""
     from backend.queues.bus import bus
-    
+
     session_id = resolve_sid(cmd.session_id)
     slides = list(_slide_store.get(session_id, []))
     if not slides:
         raise HTTPException(status_code=400, detail="No active presentation to improvise.")
-        
+
     idx = cmd.slide_index
     if idx < 0 or idx >= len(slides):
-        raise HTTPException(status_code=400, detail=f"Slide index {idx} out of range (0-{len(slides)-1})")
-        
+        raise HTTPException(status_code=400, detail=f"Slide index {idx} out of range (0-{len(slides) - 1})")
+
     current_slide = slides[idx]
-    
+
     try:
         # Call LLM to improve slide
         improved = await improvise_slide_content(current_slide, cmd.prompt)
-        
+
         # Update text fields but preserve any images!
         slides[idx]["title"] = improved["title"]
         slides[idx]["bullets"] = improved["bullets"]
         slides[idx]["notes"] = improved["notes"]
-        
+
         # Re-build plain slide data preserving images
         slides_to_save = []
         for s in slides:
-            slides_to_save.append({
-                "title": s.get("title", ""),
-                "bullets": s.get("bullets", []),
-                "notes": s.get("notes", ""),
-                "images": s.get("images", [])
-            })
-            
+            slides_to_save.append(
+                {
+                    "title": s.get("title", ""),
+                    "bullets": s.get("bullets", []),
+                    "notes": s.get("notes", ""),
+                    "images": s.get("images", []),
+                }
+            )
+
         rendered = save_and_render_pptx(slides_to_save, session_id, topic="Presentation")
         _current_slide[session_id] = idx
-        
+
         # Emit a reload event preserving current slide view
-        await bus.emit_event("ppt_command", {
-            "action": "reload",
-            "slides": rendered,
-            "filename": f"Presentation ({len(rendered)} slides)",
-            "index": idx,
-            "preserveCurrent": True
-        }, session_id)
-        
-        return {
-            "status": "ok",
-            "slide_count": len(rendered),
-            "slides": rendered,
-            "index": idx
-        }
+        await bus.emit_event(
+            "ppt_command",
+            {
+                "action": "reload",
+                "slides": rendered,
+                "filename": f"Presentation ({len(rendered)} slides)",
+                "index": idx,
+                "preserveCurrent": True,
+            },
+            session_id,
+        )
+
+        return {"status": "ok", "slide_count": len(rendered), "slides": rendered, "index": idx}
     except Exception as e:
         logger.error(f"Error improvising slide: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1782,24 +1872,19 @@ async def improvise_slide(cmd: ImproviseSlideCmd):
 async def create_presentation(cmd: CreateCmd):
     """Generates a presentation dynamically from a text prompt using Ollama qwen2.5:7b, then renders it."""
     from backend.queues.bus import bus
+
     try:
         slides = await create_presentation_from_prompt(
-            prompt=cmd.prompt,
-            session_id=cmd.session_id,
-            slide_count=cmd.slide_count
+            prompt=cmd.prompt, session_id=cmd.session_id, slide_count=cmd.slide_count
         )
         # Emit a reload event to update the frontend state in real-time
-        await bus.emit_event("ppt_command", {
-            "action": "reload",
-            "slides": slides,
-            "filename": f"AI: {cmd.prompt}"
-        }, cmd.session_id)
-        
-        return {
-            "status": "ok",
-            "slide_count": len(slides),
-            "slides": slides
-        }
+        await bus.emit_event(
+            "ppt_command",
+            {"action": "reload", "slides": slides, "filename": f"AI: {cmd.prompt}"},
+            cmd.session_id,
+        )
+
+        return {"status": "ok", "slide_count": len(slides), "slides": slides}
     except Exception as e:
         logger.error(f"Error generating presentation: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,8 +1,11 @@
-import bcrypt
+import random
+import string
 from datetime import datetime, timedelta
+
+import bcrypt
 from jose import jwt
+
 from backend.core.config import settings
-import random, string
 
 
 def hash_password(pw: str) -> str:

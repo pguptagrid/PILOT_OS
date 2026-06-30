@@ -2,11 +2,16 @@
 WebSocket /ws/events — server-push pipeline state to browser.
 Restores session state on reconnect (Feature 2).
 """
-import asyncio, json, logging
+
+import asyncio
+import json
+import logging
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from backend.core.ws_manager import register, unregister, broadcast
-from backend.queues.bus import bus
+
 from backend.core.session_state import get_state
+from backend.core.ws_manager import broadcast, register, unregister
+from backend.queues.bus import bus
 
 router = APIRouter()
 logger = logging.getLogger("pilot.ws.events")
@@ -19,7 +24,7 @@ _route_task: asyncio.Task | None = None
 async def ws_events(websocket: WebSocket, session_id: str):
     global _route_task
     await websocket.accept()
-    
+
     email = websocket.query_params.get("email")
     name = websocket.query_params.get("name")
     if email and name:
@@ -28,18 +33,20 @@ async def ws_events(websocket: WebSocket, session_id: str):
             state.session_participants = {}
         state.session_participants[email] = name
         logger.info(f"[{session_id[:6]}] Registered WS event participant: {name} ({email})")
-        
+
     token = websocket.query_params.get("token")
     user_id = None
     if token:
         try:
+            from sqlalchemy import select
+
             from backend.core.security import decode_token
             from backend.db.engine import AsyncSessionLocal
             from backend.db.models import User
-            from sqlalchemy import select
+
             payload = decode_token(token)
             user_id = int(payload["sub"])
-            
+
             async with AsyncSessionLocal() as db:
                 user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
                 if user:
@@ -53,6 +60,7 @@ async def ws_events(websocket: WebSocket, session_id: str):
 
     # Restore session state on reconnect
     from backend.core.session_state import restore_state
+
     await restore_state(session_id)
 
     # Start global event router once
@@ -77,27 +85,38 @@ async def ws_events(websocket: WebSocket, session_id: str):
                         state.typed_origin = payload.get("origin", "")
                         state.typed_destination = payload.get("destination", "")
                         state.typed_date = payload.get("date", "")
-                        logger.info(f"[{session_id[:6]}] Synced manual input context: From={state.typed_origin}, To={state.typed_destination}, Date={state.typed_date}")
+                        logger.info(
+                            f"[{session_id[:6]}] Synced manual input context: From={state.typed_origin}, To={state.typed_destination}, Date={state.typed_date}"
+                        )
                     elif payload.get("type") == "typed_email_context":
                         state = get_state(session_id)
                         state.pending_email_recipient_email = payload.get("to", "")
-                        state.pending_email_recipient_name = payload.get("to", "").split('@')[0].title() if "@" in payload.get("to", "") else payload.get("to", "")
+                        state.pending_email_recipient_name = (
+                            payload.get("to", "").split("@")[0].title()
+                            if "@" in payload.get("to", "")
+                            else payload.get("to", "")
+                        )
                         state.pending_email_subject = payload.get("subject", "")
                         state.pending_email_cc_bcc = payload.get("cc_bcc", "")
-                        logger.info(f"[{session_id[:6]}] Synced manual email input context: To={state.pending_email_recipient_email}, CcBcc={state.pending_email_cc_bcc}, Subject={state.pending_email_subject}")
+                        logger.info(
+                            f"[{session_id[:6]}] Synced manual email input context: To={state.pending_email_recipient_email}, CcBcc={state.pending_email_cc_bcc}, Subject={state.pending_email_subject}"
+                        )
                     elif payload.get("type") == "chat_message":
                         from backend.core.ws_manager import broadcast_all
-                        await broadcast_all({
-                            "type": "chat_message",
-                            "payload": {
-                                "sender_id": payload.get("sender_id"),
-                                "sender_name": payload.get("sender_name"),
-                                "target_id": payload.get("target_id"),
-                                "text": payload.get("text"),
-                                "time": payload.get("time"),
-                                "message_id": payload.get("message_id")
+
+                        await broadcast_all(
+                            {
+                                "type": "chat_message",
+                                "payload": {
+                                    "sender_id": payload.get("sender_id"),
+                                    "sender_name": payload.get("sender_name"),
+                                    "target_id": payload.get("target_id"),
+                                    "text": payload.get("text"),
+                                    "time": payload.get("time"),
+                                    "message_id": payload.get("message_id"),
+                                },
                             }
-                        })
+                        )
                 except Exception as e:
                     logger.error(f"Error processing WS message: {e}", exc_info=True)
             except asyncio.TimeoutError:
@@ -110,13 +129,15 @@ async def ws_events(websocket: WebSocket, session_id: str):
         if local_q in qs:
             qs.remove(local_q)
         unregister(session_id, websocket)
-        
+
         # Set status to offline on disconnect if not logged out / not available
         if user_id is not None:
             try:
+                from sqlalchemy import select
+
                 from backend.db.engine import AsyncSessionLocal
                 from backend.db.models import User
-                from sqlalchemy import select
+
                 async with AsyncSessionLocal() as db:
                     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
                     if user and user.status != "not availabel":
@@ -127,6 +148,7 @@ async def ws_events(websocket: WebSocket, session_id: str):
 
         # Persist state when client disconnects
         from backend.core.session_state import persist_state
+
         await persist_state(session_id)
         logger.info(f"Events WS disconnected: {session_id[:8]}")
 

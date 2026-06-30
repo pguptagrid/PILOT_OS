@@ -1,8 +1,11 @@
 """Async SQLite engine + session factory. FSE-A owns this."""
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from sqlalchemy.orm import DeclarativeBase
-from backend.core.config import settings
+
 import os
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase
+
+from backend.core.config import settings
 
 os.makedirs("data", exist_ok=True)
 
@@ -17,9 +20,10 @@ AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 async def init_db():
     from backend.db import models  # noqa — registers all ORM classes
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        
+
         def migrate_status_col(connection):
             # Using raw SQLite connection to safely add the column if missing
             dbapi_conn = connection.connection
@@ -29,6 +33,7 @@ async def init_db():
             if "status" not in cols:
                 cursor.execute("ALTER TABLE users ADD COLUMN status VARCHAR DEFAULT 'offline';")
                 dbapi_conn.commit()
+
         await conn.run_sync(migrate_status_col)
 
 

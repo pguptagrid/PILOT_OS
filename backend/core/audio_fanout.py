@@ -2,14 +2,16 @@
 Audio fanout — broadcasts incoming PCM chunks to all pipeline subscribers.
 Reads from raw_audio_q, routes by session_id.
 """
-import asyncio
+
 import logging
-from backend.queues.bus import bus, RawAudioChunk
+
+from backend.queues.bus import RawAudioChunk, bus
 
 logger = logging.getLogger("pilot.fanout")
 
 
-#It's meant to be a broadcast point: take one incoming PCM audio chunk and forward it to multiple downstream consumers — e.g. if you eventually want VAD (voice activity detection) and the speaker diarizer to each independently process the same audio in parallel, this is where that "split" would happen.
+# It's meant to be a broadcast point: take one incoming PCM audio chunk and forward it to multiple downstream consumers — e.g. if you eventually want VAD (voice activity detection) and the speaker diarizer to each independently process the same audio in parallel, this is where that "split" would happen.
+
 
 class AudioFanout:
     """

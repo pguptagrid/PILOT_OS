@@ -1,5 +1,10 @@
-import pytest, asyncio, os
+import asyncio
+import os
+
+import pytest
+
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./data/test.db")
+
 
 @pytest.fixture(scope="session")
 def event_loop():

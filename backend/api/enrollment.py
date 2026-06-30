@@ -21,16 +21,18 @@ Features: start, submit audio (mic or file), finalize, list, delete
 #       ▼
 # Enrollment Ready
 
+import asyncio
+import logging
+import os
 
-
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from backend.db.engine import get_db
 from backend.db.models import VoiceEnrollment
-import asyncio, logging
-import os
+
 router = APIRouter()
 logger = logging.getLogger("pilot.enrollment")
 
@@ -39,47 +41,50 @@ class StartReq(BaseModel):
     name: str
     role: str
 
+
 # Returns every completed speaker.
 @router.get("")
 async def list_speakers(db: AsyncSession = Depends(get_db)):
-    rows = (await db.execute(
-        select(VoiceEnrollment).where(VoiceEnrollment.status == "ready")
-    )).scalars().all()
-    return [{"id": r.id, "name": r.speaker_name, "role": r.role,
-             "voice_id": f"#{r.id:06X}"} for r in rows]
+    rows = (
+        (await db.execute(select(VoiceEnrollment).where(VoiceEnrollment.status == "ready"))).scalars().all()
+    )
+    return [{"id": r.id, "name": r.speaker_name, "role": r.role, "voice_id": f"#{r.id:06X}"} for r in rows]
 
-#Begins a new voice enrollment process by registering a name and role.
+
+# Begins a new voice enrollment process by registering a name and role.
 @router.post("/start")
 async def start(req: StartReq, db: AsyncSession = Depends(get_db)):
 
     e = VoiceEnrollment(user_id=None, speaker_name=req.name, role=req.role)
-    db.add(e) # add a new instance 
-    await db.commit() # write the record and generates a uniqie , auto incremented primary key. 
-    await db.refresh(e) # reflect actual changes
+    db.add(e)  # add a new instance
+    await db.commit()  # write the record and generates a uniqie , auto incremented primary key.
+    await db.refresh(e)  # reflect actual changes
     return {"speaker_id": e.id, "name": req.name, "role": req.role}
 
 
 from typing import List
+
 
 @router.post("/audio")
 async def submit_audio(
     speaker_id: str = Form(...),
     audio: List[UploadFile] = File(...),
     email: str = Form(None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """Accepts multiple mic recordings (webm/wav), selects the best one, and creates User."""
 
-    # queries the database to find the record matching the provided speaker_id . 
-    e = (await db.execute(
-        select(VoiceEnrollment).where(VoiceEnrollment.id == int(speaker_id))
-    )).scalar_one_or_none()
+    # queries the database to find the record matching the provided speaker_id .
+    e = (
+        await db.execute(select(VoiceEnrollment).where(VoiceEnrollment.id == int(speaker_id)))
+    ).scalar_one_or_none()
     if not e:
         raise HTTPException(404, "Enrollment not found")
 
     # Extract embeddings for all 3 uploaded audio segments and calculate the Average (Mean) embedding vector
-    from backend.services.enrollment import embed_provider
     import numpy as np
+
+    from backend.services.enrollment import embed_provider
 
     embeddings = []
     for aud in audio:
@@ -109,7 +114,7 @@ async def submit_audio(
     # Check if this email corresponds to a pending signup session
     from backend.api.auth import PENDING_SIGNUPS
     from backend.db.models import User
-    
+
     if email and email in PENDING_SIGNUPS:
         pending = PENDING_SIGNUPS.pop(email)
         user = User(
@@ -118,13 +123,15 @@ async def submit_audio(
             hashed_pw=pending["hashed_pw"],
             role=pending["role"],
             is_active=True,
-            embedding=emb_bytes  # Best voice embedding saved directly as BLOB in SQLite users table
+            embedding=emb_bytes,  # Best voice embedding saved directly as BLOB in SQLite users table
         )
         db.add(user)
         await db.commit()
         await db.refresh(user)
         e.user_id = user.id
-        logger.info(f"Pending user '{user.email}' registered successfully with ID={user.id} and best voice embedding.")
+        logger.info(
+            f"Pending user '{user.email}' registered successfully with ID={user.id} and best voice embedding."
+        )
 
     e.embedding = emb_bytes
     e.npy_path = npy_path
@@ -134,24 +141,26 @@ async def submit_audio(
     logger.info(f"Enrollment complete: {e.speaker_name} → {voice_id}")
     return {"status": "ready", "speaker_id": speaker_id, "voice_id": voice_id}
 
-# manually marks an enrollment as completed and ready to use. 
+
+# manually marks an enrollment as completed and ready to use.
 @router.post("/finalize/{speaker_id}")
 async def finalize(speaker_id: int, db: AsyncSession = Depends(get_db)):
-    e = (await db.execute(
-        select(VoiceEnrollment).where(VoiceEnrollment.id == speaker_id)
-    )).scalar_one_or_none()
+    e = (
+        await db.execute(select(VoiceEnrollment).where(VoiceEnrollment.id == speaker_id))
+    ).scalar_one_or_none()
     if not e:
         raise HTTPException(404)
     e.status = "ready"
     await db.commit()
     return {"status": "ready", "voice_id": f"#{speaker_id:06X}"}
 
-# remove an enrollment permanantly. 
+
+# remove an enrollment permanantly.
 @router.delete("/{speaker_id}")
 async def delete(speaker_id: int, db: AsyncSession = Depends(get_db)):
-    e = (await db.execute(
-        select(VoiceEnrollment).where(VoiceEnrollment.id == speaker_id)
-    )).scalar_one_or_none()
+    e = (
+        await db.execute(select(VoiceEnrollment).where(VoiceEnrollment.id == speaker_id))
+    ).scalar_one_or_none()
     if e:
         await db.delete(e)
         await db.commit()
